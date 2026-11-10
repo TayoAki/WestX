@@ -1,3 +1,4 @@
+import type { KitId } from "./kits";
 import type { Rng } from "./rng";
 import type { V3 } from "./vec";
 
@@ -71,6 +72,14 @@ export type FState =
   | "ko";
 
 export type MoveId =
+  // The hunter: a pistol-whip, a backhand with the brace, then the brace's blast.
+  | "w1"
+  | "a2"
+  | "armBlast"
+  | "armLaunch"
+  | "armSlam"
+  | "thunderclap"
+  // The outlaw.
   | "s1"
   | "s2"
   | "s3"
@@ -95,6 +104,8 @@ export interface Combo {
 export interface Fighter {
   id: number;
   name: string;
+  kit: KitId;
+  maxHp: number;
   pos: V3;
   vel: V3;
   yaw: number;
@@ -104,9 +115,12 @@ export interface Fighter {
   hp: number;
   /** Nerve. 0..100. Built by holding steady and by landing hits. */
   meter: number;
-  /** Slip charges. */
+  /** Charges for breaking out of a combo. */
   pips: number;
   pipTimer: number;
+  /** Dash charges left, and progress toward the next one. */
+  dashes: number;
+  dashTimer: number;
   guardHp: number;
   /** Awakening gauge, 0..100. */
   awaken: number;
@@ -153,7 +167,6 @@ export interface Fighter {
   airHang: boolean;
 
   invuln: number;
-  stepCd: number;
   /** Frames since guard was raised, for the perfect-guard window. */
   guardT: number;
   /** Fractional clock used when an awakened opponent slows this fighter. */
@@ -239,6 +252,12 @@ export type SimEvent =
   | { type: "shot"; owner: number; pos: V3; kind: ShotKind }
   /** A string ender fired its round at point-blank range. */
   | { type: "enderShot"; id: number; pos: V3; dir: V3 }
+  /** The hunter's brace discharged. `big` is the thunderclap. */
+  | { type: "armBlast"; id: number; pos: V3; dir: V3; big: boolean }
+  /** The brace turned a shot aside. `back` means it was sent back at the shooter. */
+  | { type: "deflect"; id: number; pos: V3; back: boolean }
+  /** The hunter caught a blow mid-combo. */
+  | { type: "armCatch"; id: number; pos: V3 }
   | { type: "dryFire"; id: number; pos: V3 }
   /** A round slid into the cylinder while holding steady. */
   | { type: "chamber"; id: number }
@@ -277,6 +296,8 @@ export interface MatchOptions {
   training: boolean;
   /** Open the duel with a standoff. */
   opening: boolean;
+  /** Which kit each fighter uses. */
+  kits: [KitId, KitId];
 }
 
 export interface Match {

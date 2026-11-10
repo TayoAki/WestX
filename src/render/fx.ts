@@ -487,6 +487,48 @@ export class Fx {
       case "dryFire":
         this.dust(vec(e.pos), 2, 0.5, 1);
         break;
+      case "armBlast": {
+        // The brace discharges: a thunderclap of storm-light, thrown forward.
+        const pos = vec(e.pos);
+        const size = e.big ? 1.6 : 1;
+        this.star(pos, WHITE, 5.2 * size, 0.16);
+        this.shock(pos, FULGUR, 0.8, 7.5 * size, 0.3);
+        this.shock(pos, WHITE, 0.4, 4 * size, 0.2);
+        for (let i = 1; i <= 3; i++) {
+          this.tmp.set(pos.x + e.dir.x * i * 1.4, pos.y, pos.z + e.dir.z * i * 1.4);
+          this.spark(this.tmp, e.big ? 16 : 10, FULGUR, 26, 0.34, 0.3);
+        }
+        const feet = rigs[e.id].root.position;
+        if (feet.y < 1) {
+          this.dust(feet, e.big ? 16 : 8, 2.2, 8);
+          this.groundRing(feet, FULGUR, 1, e.big ? 12 : 7, 0.35, 0.7);
+        }
+        this.shake = Math.min(1.3, this.shake + (e.big ? 1.0 : 0.6));
+        break;
+      }
+      case "deflect": {
+        const pos = vec(e.pos);
+        rigs[e.id].brace(e.back ? 0.3 : 0.18);
+        if (e.back) {
+          this.star(pos, FULGUR, 2.8, 0.14);
+          this.shock(pos, WHITE, 0.4, 3.4, 0.2);
+          this.spark(pos, 16, FULGUR, 16, 0.26, 0.3);
+          this.shake = Math.min(1.3, this.shake + 0.25);
+        } else {
+          this.star(pos, new Color3(1, 0.95, 0.7), 0.9, 0.06);
+          this.spark(pos, 5, new Color3(1, 0.9, 0.6), 12, 0.18, 0.2);
+        }
+        break;
+      }
+      case "armCatch": {
+        const pos = vec(e.pos);
+        rigs[e.id].brace(0.4);
+        this.shock(pos, FULGUR, 3.6, 0.5, 0.18);
+        this.star(pos, WHITE, 2.6, 0.12);
+        this.spark(pos, 14, FULGUR, 12, 0.24, 0.3);
+        this.shake = Math.min(1.3, this.shake + 0.4);
+        break;
+      }
       case "reloadEnd":
         if (e.perfect) {
           const hand = rigs[e.id].hand.getAbsolutePosition();

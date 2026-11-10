@@ -1,5 +1,5 @@
 import { C, MOVES } from "./moves";
-import { isFlying, isStunned } from "./match";
+import { isFlying, isStunned, kitOf } from "./match";
 import { makeRng, type Rng } from "./rng";
 import { blankInput, type InputFrame, type Match } from "./types";
 import { dist, distH } from "./vec";
@@ -55,7 +55,11 @@ type Plan =
   | "lariat"
   | "ult"
   | "awaken"
-  | "airChase";
+  | "airChase"
+  /** Walk in behind the brace. Only the hunter can. */
+  | "advance"
+  /** Raise the brace, then discharge it through their guard. */
+  | "clap";
 
 export class AI {
   private rng: Rng;
@@ -82,6 +86,8 @@ export class AI {
   private steadyRolled = false;
   private reloadRolled = false;
   private reloadGo = false;
+  private clapRolled = false;
+  private shotRolled = false;
 
   constructor(
     private id: number,
@@ -186,7 +192,7 @@ export class AI {
     if (me.combo.hits > 0 && isFlying(op)) {
       if (op.state === "blasted" && !this.chaseRolled) {
         this.chaseRolled = true;
-        if (me.meter >= C.CHASE_COST && this.rng.chance(p.chase)) this.setPlan("airChase", 40);
+        if (me.dashes > 0 && this.rng.chance(p.chase)) this.setPlan("airChase", 40);
       }
       if (op.state === "launched" && !this.pursueRolled) {
         this.pursueRolled = true;
@@ -214,7 +220,7 @@ export class AI {
     // The Last Word is coming: step aside.
     for (const proj of m.projectiles) {
       if (proj.owner === this.id || proj.kind !== "ult") continue;
-      if (dist(proj.pos, me.pos) < 16 && me.state === "free" && me.stepCd <= 0 && this.rng.chance(p.guard * 0.3)) {
+      if (dist(proj.pos, me.pos) < 16 && me.state === "free" && me.dashes > 0 && this.rng.chance(p.guard * 0.3)) {
         inp.dash = !me.prev.dash;
         inp.mx = this.side;
         return inp;
@@ -231,12 +237,33 @@ export class AI {
     }
     if (op.state !== "steady") this.steadyRolled = false;
 
-    if (t >= this.guardAt && t < this.guardUntil) {
+    const kit = kitOf(me);
+    // Being shot at from range: the hunter raises the brace and walks in.
+    const underFire = m.projectiles.some((pr) => pr.owner !== this.id && (pr.kind === "bullet" || pr.kind === "quick"));
+    if (kit.deflect && underFire && dh > 5 && me.state === "free" && this.plan !== "advance") {
+      if (!this.shotRolled) {
+        this.shotRolled = true;
+        if (this.rng.chance(0.25 + p.guard * 0.6)) this.setPlan("advance", 150);
+      }
+    } else if (!underFire) this.shotRolled = false;
+    // They are turtling up close: go through the guard.
+    if (kit.thunderclap && op.state === "guard" && dh < 3.6 && me.meter >= C.CLAP_COST && me.state === "free") {
+      if (!this.clapRolled) {
+        this.clapRolled = true;
+        if (this.rng.chance(0.25 + p.aggression * 0.45)) this.setPlan("clap", 30);
+      }
+    } else if (op.state !== "guard") this.clapRolled = false;
+    // A rival hiding behind a guard at range: the rope goes straight through it.
+    if (!kit.thunderclap && op.state === "guard" && op.t === 20 && dh > 5 && dh < 24 && me.meter >= C.LARIAT_COST && me.state === "free") {
+      if (this.rng.chance(0.3 + p.aggression * 0.5)) this.setPlan("lariat", 50);
+    }
+
+    if (t >= this.guardAt && t < this.guardUntil && this.plan !== "advance" && this.plan !== "clap") {
       inp.guard = true;
       return inp;
     }
 
-    if (me.state !== "free" && me.state !== "attack" && me.state !== "steady" && me.state !== "guard") return inp;
+    if (me.state !== "free" && me.state !== "attack" && me.state !== "steady" && me.state !== "guard" && me.state !== "blockstun") return inp;
 
     this.pt++;
     if (this.plan === "idle" && this.pt >= this.pdur) this.choose(m, dh, dy);
@@ -245,7 +272,7 @@ export class AI {
       case "approach": {
         inp.my = 1;
         inp.mx = this.side * 0.25;
-        if (dh > 12 && me.meter >= C.CHASE_COST + 10 && this.pt === 6 && this.rng.chance(0.3 + p.aggression * 0.4)) {
+        if (dh > 9 && me.dashes > 0 && this.pt === 6 && this.rng.chance(0.3 + p.aggression * 0.4)) {
           inp.dash = true;
           inp.mx = 0;
         }
@@ -258,7 +285,8 @@ export class AI {
       }
       case "string": {
         // One press per move, like a person: start the string, then confirm each hit into the next.
-        const inString = me.state === "attack" && (me.move === "s1" || me.move === "s2" || me.move === "s3");
+        const inString = me.state === "attack" && me.move !== null && kit.string.includes(me.move);
+        const last = kit.string[kit.string.length - 1];
         if (me.state === "free" && this.presses === 0) {
           inp.strike = true;
           this.presses = 1;
@@ -267,10 +295,27 @@ export class AI {
           this.pressedMove = me.move;
           this.presses++;
         }
-        if (me.move === "s3" || this.presses >= 4) inp.tilt = this.ender;
+        if (me.move === last || this.presses > kit.string.length) inp.tilt = this.ender;
         const dropped = me.state === "free" && this.presses >= 1 && this.pt > 12;
         const whiffing = me.state === "attack" && !me.moveHit && me.mf > 12 && dh > 4;
         if (this.pt >= this.pdur || dropped || whiffing) this.setPlan("idle", this.rng.int(4, 10 + p.pause));
+        break;
+      }
+      case "advance": {
+        // Shield up, walking forward. Bullets ring off the brace.
+        inp.guard = true;
+        inp.my = 1;
+        inp.mx = this.side * 0.15;
+        if (dh < 3.2 && Math.abs(dy) < 1.7) {
+          this.setPlan("string", 70);
+          this.ender = this.rng.chance(0.3) ? 1 : this.rng.chance(0.25) ? -1 : 0;
+        } else if (this.pt >= this.pdur || me.guardHp < 25) this.setPlan("idle", this.rng.int(2, 10));
+        break;
+      }
+      case "clap": {
+        inp.guard = true;
+        if (this.pt >= 5 && me.state === "guard" && !me.prev.strike) inp.strike = true;
+        if (this.pt >= this.pdur || me.state === "attack") this.setPlan("idle", this.rng.int(6, 14));
         break;
       }
       case "airChase": {
@@ -323,7 +368,7 @@ export class AI {
       case "retreat": {
         inp.my = -1;
         inp.mx = this.side * 0.5;
-        if (this.pt === 3 && me.stepCd <= 0 && this.rng.chance(0.5)) inp.dash = true;
+        if (this.pt === 3 && me.dashes > 1 && this.rng.chance(0.5)) inp.dash = true;
         if (this.pt >= this.pdur) this.setPlan("idle", 2);
         break;
       }
@@ -373,6 +418,8 @@ export class AI {
     const a = p.aggression;
     const loaded = me.reload === 0 && me.ammo > 0;
     const wantsSteady = me.grounded && (me.meter < 70 || me.ammo < 3);
+    const kit = kitOf(me);
+    if (kit.deflect && dh > 7 && op.ammo > 0) options.push(["advance", 2.2, r.int(90, 160)]);
     if (dh > 18) {
       options.push(["approach", 3 * a, 90], ["circle", 0.6, r.int(30, 60)]);
       if (loaded) options.push(["shoot", 1.5, r.int(40, 80)]);

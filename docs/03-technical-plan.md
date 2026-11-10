@@ -74,7 +74,7 @@ tools/        smoke.mjs, shot.mjs, build-page.mjs
 
 | Checked here | How |
 |---|---|
-| Every combat rule | 56 automated tests |
+| Every combat rule | 70 automated tests |
 | Whole matches run to a knockout with no broken state | 24 AI-versus-AI matches per test run |
 | The built game boots, starts a duel and takes keyboard input | Headless-browser smoke test |
 | Layout on desktop and phone sizes | Screenshots reviewed by me |

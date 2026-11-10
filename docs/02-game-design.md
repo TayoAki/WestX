@@ -85,8 +85,8 @@ One hero per class at launch. The system allows more heroes per class later.
 
 | | Bounty Hunter | Witch | Engineer |
 |---|---|---|---|
-| Combat role | Rushdown all-rounder | Ranged and air control | Setup, armor, area denial |
-| Weapons | Twin revolvers, fulgur-wire lariat | Hexes, spirit familiars | Rivet gun, steam gauntlet, deployables |
+| Combat role | A wall that walks: heavy, deliberate, hard to move | Ranged and air control | Setup, armor, area denial |
+| Weapons | Revolver, storm brace, fulgur-wire lariat | Hexes, spirit familiars | Rivet gun, steam gauntlet, deployables |
 | Meter | **Nerve** — builds while holding steady | **Hex** — fills fastest, shared with flight | **Pressure** — fills on its own, can overfill and overheat |
 | Mobility | Lariat swing, best mounted fighter | Levitation and short flight | Jump-jet hops, steam cycle |
 | Strong against | Witch (closes the gap) | Engineer (fights from the air) | Hunter (denies space, absorbs hits) |
@@ -94,23 +94,48 @@ One hero per class at launch. The system allows more heroes per class later.
 
 ### Bounty Hunter
 
-The hunter is the most western of the three, and the only one built so far. The kit is
-a gunfight sped up to anime pace.
+The hunter is the one you play, and the only class built so far. The feeling to aim
+for is a lawman who does not dance: he walks in, takes what is thrown at him, and
+ends it in a few heavy blows. Everything about the kit is limited on purpose.
 
-- **Gun-fu string:** two pistol-whips and a spur kick, then an ender that fires a round
-  at point-blank range. The round is what sends them flying; with an empty cylinder
-  the ender lands as a weak pistol-whip.
-- **The cylinder:** six rounds, spent by shots and enders. When it empties, a marker
-  sweeps a gauge: hit the gold zone for a fast reload and two hot rounds, or miss and
-  wait longer.
+**The brace.** His left forearm was struck by the storm and is bound in a brass brace
+with a strip of fulgur glass down it. It is his shield and his heaviest weapon, and
+it runs on Nerve.
+
+- **Brace up (guard):** he can walk behind it. Light shots ring off for no damage.
+  Raise it at the last instant and the shot goes back at the shooter.
+- **Catch:** mid-combo, he does not vanish. He catches the blow, stays where he is,
+  and the attacker is the one left open. Three charges.
+- **String:** three blows, not four. A pistol-whip, a backhand with the brace, then
+  the brace discharges. The blast spends Nerve; without it the blow lands flat.
+- **Thunderclap:** strike from behind the brace. Slow to wind up, and it goes
+  straight through a guard.
+- **Shoulder charge:** his dash. It hits whoever it reaches, and he has two.
+- **Limits:** one launch and one chase per combo, and no double jump.
+
+**The revolver.** His right hand, and his reach.
+
+- **The cylinder:** six rounds. When it empties, a marker sweeps a gauge: hit the gold
+  zone for a fast reload and two hot rounds, or miss and wait longer.
 - **Fan the hammer:** hold the trigger to empty the cylinder in one burst.
 - **Steady:** holster and stand still. Nerve builds, rounds slide back in, and the
   quickdraw arms.
 - **Quickdraw:** one shot from the holster. It hits harder the longer you waited, and
   it goes through cover.
+
+**The rest.**
+
 - **Lariat:** rope them and pull them in, or zip yourself to them.
 - **Awakening — Reckoning:** everything else slows down.
 - **Ultimate — Last Word:** six shots, one cinematic. It leaves the cylinder empty.
+
+### The outlaw (the rival)
+
+The rival plays the opposite way, so the hunter's weight is felt against something.
+The outlaw is faster, has three dashes that return quickly, a double jump, a four-hit
+string whose ender fires a round, two launches and two chases per combo, and vanishes
+behind you instead of catching. He has less health and hits lighter. He has no brace:
+bullets hurt him, and he cannot walk through them.
 
 ### Witch
 
@@ -153,9 +178,9 @@ Every hero shares these. Class kits change what they look like and how they're t
 | **Strike** | One-button melee string. Stick direction on the last hit picks the ender: launch up, blast away or slam down. |
 | **Shot** | Ranged attack usable while moving or airborne. Hold for a heavy shot. |
 | **Charge** | Hold to fill your meter. You are exposed while doing it. For the hunter this is holding steady: holstered, still and quiet. |
-| **Chase** | Meter-fuelled homing dash to your target. Used to close distance and to follow an enemy you just blasted away. |
+| **Chase** | A homing dash to your target, used to close distance and to follow an enemy you just blasted away. It spends a dash charge, and charges return slowly. |
 | **Guard** | Blocks. Guard at the last instant for a **Perfect Guard** and a counter window. Guards can be broken. |
-| **Slip** | While being hit, spend a pip to vanish and reappear behind the attacker. Four pips, slow to refill. |
+| **Slip** | While being hit, spend a pip to vanish and reappear behind the attacker. Slow to refill. The hunter's version is the catch: he stays put and the attacker is thrown off. |
 | **Specials** | Four equipped moves that cost meter. |
 | **Awakening** | A temporary powered-up form, available at low health or a full gauge. |
 | **Ultimate** | A full-meter cinematic finisher. |
@@ -164,6 +189,14 @@ Every hero shares these. Class kits change what they look like and how they're t
 
 Slip pips are the heart of duel mind-games: every combo is a question of whether the
 defender will spend one, and running out is how fights are lost.
+
+### Why dashes and combos are limited
+
+Unlimited dashing and long juggles make every fighter an acrobat, and every fight
+looks the same. Limits are what give a character a shape. The hunter gets two dashes
+and three-hit strings so that each one is a decision, and so that standing your
+ground behind the brace is the strong choice it should be. The outlaw gets more of
+both, and pays for it in health and weight.
 
 ### Western beats
 

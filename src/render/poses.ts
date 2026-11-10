@@ -476,6 +476,21 @@ const COUP = pose({
   hipR: [0.1, 0, 0.14],
 });
 
+// The hunter's guard: the brace held out in front like a shield, the gun low behind it.
+const BRACE_GUARD = pose({
+  y: -0.1,
+  spine: [0.18, 0.4, 0],
+  head: [0, -0.35, 0],
+  shL: [-1.45, 0, 0.3],
+  elL: [-1.35, 0, 0],
+  shR: [-0.25, 0, 0.3],
+  elR: [-0.8, 0, 0],
+  hipL: [-0.4, 0, -0.14],
+  knL: [0.55, 0, 0],
+  hipR: [0.3, 0, 0.14],
+  knR: [0.55, 0, 0],
+});
+
 const VICTORY = pose({
   spine: [0, 0.15, 0],
   head: [0.2, 0, 0],
@@ -497,6 +512,14 @@ const PARRIED = pose({
   hipR: [-0.4, 0, 0],
   knR: [0.6, 0, 0],
 });
+
+// The hunter's arm strikes mirror the outlaw's gun-hand ones onto the brace.
+const ARM_WIND = { ...mirror(S1_WIND), y: -0.2 };
+const ARM_HIT = mirror(BLAST_HIT);
+const ARM_LAUNCH_WIND = mirror(LAUNCH_WIND);
+const ARM_LAUNCH_HIT = mirror(LAUNCH_HIT);
+// The thunderclap winds up low and long, so you can see it coming.
+const CLAP_WIND = pose({ ...mirror(S1_WIND), y: -0.32, spine: [0.45, -0.9, 0], head: [-0.2, 0.7, 0] });
 
 function runPose(phase: number, amount: number): Pose {
   const s = Math.sin(phase);
@@ -543,6 +566,8 @@ export interface RigClock {
   tumble: number;
   /** 1 right after a recoil-worthy shot, decaying to 0. */
   recoil: number;
+  /** Seconds left of a snapped-up brace, after a deflect or a catch. */
+  brace: number;
 }
 
 /** Chooses the key pose for a fighter's current state. */
@@ -566,6 +591,11 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
       }
       if (!f.grounded) res.pose = f.vel.y > 2 ? JUMP : FALL;
       else res.pose = runPose(clock.phase, Math.min(1, speed / 5));
+      if (clock.brace > 0 && f.kit === "hunter") {
+        res.pose = BRACE_GUARD;
+        res.rate = 50;
+        break;
+      }
       if (f.shotPose > 0) {
         // Fire from the hip without breaking stride: only the gun arm and torso change.
         const base = res.pose;
@@ -581,7 +611,25 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
       const from = mv && mv.hits.length ? mv.hits[0].from : 6;
       switch (f.move) {
         case "s1":
+        case "w1":
           res.pose = strike(S1_WIND, S1_HIT, f.mf, from, mv!.total);
+          break;
+        case "a2":
+          res.pose = strike(S2_WIND, S2_HIT, f.mf, from, mv!.total);
+          break;
+        case "armBlast":
+          res.pose = strike(ARM_WIND, ARM_HIT, f.mf, from, mv!.total);
+          break;
+        case "armLaunch":
+          res.pose = strike(ARM_LAUNCH_WIND, ARM_LAUNCH_HIT, f.mf, from, mv!.total);
+          break;
+        case "armSlam":
+          res.pose = strike(SLAM_WIND, SLAM_HIT, f.mf, from, mv!.total);
+          break;
+        case "thunderclap":
+          res.pose = strike(CLAP_WIND, ARM_HIT, f.mf, from, mv!.total);
+          // A slow, deliberate wind-up, then a snap.
+          res.rate = f.mf < from - 1 ? 14 : 44;
           break;
         case "s2":
           res.pose = strike(S2_WIND, S2_HIT, f.mf, from, mv!.total);
@@ -637,11 +685,16 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
       res.rate = 40;
       break;
     case "guard":
-      res.pose = GUARD;
+      if (f.kit === "hunter") {
+        // Walking behind the brace: the legs keep their stride, the arms hold the wall.
+        const legs = runPose(clock.phase, Math.min(1, speed / 3) * 0.7);
+        res.pose = { ...BRACE_GUARD, hipL: legs.hipL, knL: legs.knL, hipR: legs.hipR, knR: legs.knR };
+        if (speed < 0.5) res.pose = BRACE_GUARD;
+      } else res.pose = GUARD;
       res.rate = 34;
       break;
     case "blockstun":
-      res.pose = { ...GUARD, spine: [-0.1, 0, 0], y: -0.16 };
+      res.pose = f.kit === "hunter" ? { ...BRACE_GUARD, spine: [-0.05, 0.4, 0], y: -0.16 } : { ...GUARD, spine: [-0.1, 0, 0], y: -0.16 };
       res.rate = 34;
       break;
     case "parried":

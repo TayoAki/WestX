@@ -46,7 +46,7 @@ export class Game {
     const params = new URLSearchParams(location.search);
     this.stage = createStage(canvas, params.has("lowres"));
     const scene = this.stage.scene;
-    this.rigs = [new Rig(scene, 0, PALETTES[0]), new Rig(scene, 1, PALETTES[1])];
+    this.rigs = [new Rig(scene, 0, PALETTES[0], "hunter"), new Rig(scene, 1, PALETTES[1], "outlaw")];
     this.fx = new Fx(scene, this.stage, this.rigs);
     this.props = new PropsView(scene);
     this.cam = new CameraRig(this.stage.camera);

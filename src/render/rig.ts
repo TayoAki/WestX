@@ -10,6 +10,7 @@ import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import "@babylonjs/core/Rendering/outlineRenderer";
 import type { Scene } from "@babylonjs/core/scene";
+import type { KitId } from "../sim/kits";
 import type { Fighter, Match } from "../sim/types";
 import { choosePose, JOINTS, type Joint, type Pose, type RigClock } from "./poses";
 import { makeGlow } from "./stage";
@@ -46,19 +47,24 @@ export class Rig {
   private meshes: Mesh[] = [];
   private aura: Mesh;
   private auraMat: StandardMaterial;
-  private clock: RigClock = { phase: 0, time: 0, tumble: 0, recoil: 0 };
+  private clock: RigClock = { phase: 0, time: 0, tumble: 0, recoil: 0, brace: 0 };
+  private coreMat: StandardMaterial | null = null;
+  private coreFlash = 0;
   private flash = 0;
   private handGuns: Mesh[] = [];
   private hipGuns: Mesh[] = [];
   private lastPos = new Vector3();
   /** World position of the gun hand, for muzzle flashes and the lasso. */
   readonly hand: TransformNode;
+  /** World position of the brace fist, for the hunter's arm effects. */
+  readonly fist: TransformNode;
   readonly auraColor: Color3;
 
   constructor(
     scene: Scene,
     readonly id: number,
     palette: Palette,
+    kit: KitId,
   ) {
     this.auraColor = Color3.FromHexString(palette.aura);
     const mat = (key: string, hex: string) => {
@@ -116,6 +122,8 @@ export class Rig {
     part(CreateCylinder(`f${id}-hatband`, { height: 0.05, diameter: 0.375, tessellation: 12 }, scene), head, band, 0, 0.3, 0, 0);
 
     let hand!: TransformNode;
+    let fist!: TransformNode;
+    const braced = kit === "hunter";
     for (const side of [-1, 1]) {
       const s = side < 0 ? "L" : "R";
       const shoulder = node(`sh${s}`, spine, 0.27 * side, 0.5, 0);
@@ -124,14 +132,31 @@ export class Rig {
       const elbow = node(`el${s}`, shoulder, 0, -0.3, 0);
       this.nodes[`el${s}` as Joint] = elbow;
       part(cap(`fore${s}`, 0.34, 0.068), elbow, shirt, 0, -0.14, 0);
-      part(CreateSphere(`f${id}-hand${s}`, { diameter: 0.14, segments: 8 }, scene), elbow, skin, 0, -0.31, 0);
-      // A revolver in each hand, pointing along the forearm.
-      this.handGuns.push(part(CreateBox(`f${id}-gun${s}`, { width: 0.05, height: 0.3, depth: 0.09 }, scene), elbow, steel, 0, -0.46, 0.03, 0.015));
-      // The same gun, holstered on the hip. Only one of the pair is shown at a time.
-      const holster = part(CreateBox(`f${id}-holster${s}`, { width: 0.06, height: 0.3, depth: 0.1 }, scene), body, steel, 0.215 * side, -0.16, 0.03, 0.015);
-      holster.rotation.x = 0.25;
-      holster.setEnabled(false);
-      this.hipGuns.push(holster);
+      if (side < 0) fist = node("fistL", elbow, 0, -0.36, 0);
+      if (braced && side < 0) {
+        // The hunter's left arm: a brass brace bound over a storm-struck forearm.
+        // It is his shield and, when it discharges, his heaviest weapon.
+        const brass = mat("brass", "#c9963a");
+        part(CreateCylinder(`f${id}-brace`, { height: 0.36, diameter: 0.27, tessellation: 8 }, scene), elbow, brass, 0, -0.16, 0, 0.028);
+        for (const y of [-0.04, -0.28]) part(CreateCylinder(`f${id}-band${y}`, { height: 0.05, diameter: 0.31, tessellation: 8 }, scene), elbow, steel, 0, y, 0, 0);
+        part(CreateSphere(`f${id}-fist`, { diameter: 0.21, segments: 8 }, scene), elbow, brass, 0, -0.38, 0, 0.022);
+        // A strip of fulgur glass down the brace. It brightens as Nerve builds.
+        const core = CreateBox(`f${id}-core`, { width: 0.07, height: 0.26, depth: 0.05 }, scene);
+        this.coreMat = makeGlow(scene, `f${id}-coreMat`, "#5ef2ff");
+        core.material = this.coreMat;
+        core.parent = elbow;
+        core.position.set(0, -0.16, 0.135);
+        core.isPickable = false;
+      } else {
+        part(CreateSphere(`f${id}-hand${s}`, { diameter: 0.14, segments: 8 }, scene), elbow, skin, 0, -0.31, 0);
+        // A revolver in the hand, pointing along the forearm.
+        this.handGuns.push(part(CreateBox(`f${id}-gun${s}`, { width: 0.05, height: 0.3, depth: 0.09 }, scene), elbow, steel, 0, -0.46, 0.03, 0.015));
+        // The same gun, holstered on the hip. Only one of the pair is shown at a time.
+        const holster = part(CreateBox(`f${id}-holster${s}`, { width: 0.06, height: 0.3, depth: 0.1 }, scene), body, steel, 0.215 * side, -0.16, 0.03, 0.015);
+        holster.rotation.x = 0.25;
+        holster.setEnabled(false);
+        this.hipGuns.push(holster);
+      }
       if (side > 0) hand = node("handR", elbow, 0, -0.6, 0.03);
 
       const hip = node(`hip${s}`, body, 0.11 * side, -0.08, 0);
@@ -143,6 +168,7 @@ export class Rig {
       part(CreateBox(`f${id}-boot${s}`, { width: 0.15, height: 0.11, depth: 0.3 }, scene), knee, boots, 0, -0.42, 0.06);
     }
     this.hand = hand;
+    this.fist = fist;
 
     for (const j of JOINTS) this.cur[j] = [0, 0, 0];
 
@@ -162,6 +188,12 @@ export class Rig {
     this.flash = Math.max(this.flash, amount);
   }
 
+  /** Snaps the brace up for a moment and flares its core: a deflect or a catch. */
+  brace(seconds: number): void {
+    this.clock.brace = Math.max(this.clock.brace, seconds);
+    this.coreFlash = 1;
+  }
+
   /** Kicks the gun arm, for shots fired during the ultimate. */
   recoil(): void {
     this.clock.recoil = 1;
@@ -174,11 +206,12 @@ export class Rig {
     const clock = this.clock;
     clock.time += dt;
     clock.recoil = Math.max(0, clock.recoil - dt * 7);
+    clock.brace = Math.max(0, clock.brace - dt);
     const dx = x - this.lastPos.x;
     const dz = z - this.lastPos.z;
     const speed = dt > 0 ? Math.hypot(dx, dz) / dt : 0;
     this.lastPos.set(x, y, z);
-    if (f.state === "free" && f.grounded) clock.phase += Math.min(speed, 12) * dt * 1.45;
+    if ((f.state === "free" || f.state === "guard") && f.grounded) clock.phase += Math.min(speed, 12) * dt * 1.45;
     const tumbling = f.state === "launched" || f.state === "blasted" || f.state === "bounced" || (f.state === "ko" && !f.grounded);
     clock.tumble = tumbling ? clock.tumble + dt * 13 : 0;
 
@@ -207,6 +240,13 @@ export class Rig {
       for (const mat of this.mats) mat.setFloat("uFlash", this.flash * 0.85);
     }
 
+    if (this.coreMat) {
+      // The glass glows with the Nerve stored in it, and flares when the brace does its work.
+      this.coreFlash = Math.max(0, this.coreFlash - dt * 4);
+      const armed = f.state === "attack" && (f.move === "thunderclap" || f.move === "armBlast" || f.move === "armLaunch" || f.move === "armSlam");
+      const glow = Math.min(1.6, 0.12 + 0.88 * (f.meter / 100) + this.coreFlash + (armed ? 0.6 + Math.sin(clock.time * 40) * 0.2 : 0));
+      this.coreMat.emissiveColor.set(0.37 * glow, 0.95 * glow, glow);
+    }
     for (const g of this.handGuns) g.setEnabled(!res.holstered);
     for (const g of this.hipGuns) g.setEnabled(res.holstered);
 

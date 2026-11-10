@@ -43,13 +43,83 @@ export interface MoveDef {
   invuln?: number;
   /** The move fires a round at point-blank range. With an empty cylinder it lands as a weak pistol-whip. */
   round?: boolean;
+  /** The move discharges the brace, which costs this much Nerve. Without it the blow lands with no blast. */
+  nerve?: number;
 }
 
 const NEVER = 9999;
 
-// The hunter fights with the guns even up close: two pistol-whips and a spur kick,
-// then an ender that puts a round into the target.
+// Two kits share this table. The hunter's string is short and heavy: a pistol-whip,
+// a backhand with the brace, then the brace's blast. The outlaw's is longer and
+// lighter: two pistol-whips and a spur kick, then a round at point-blank range.
 export const MOVES: Record<MoveId, MoveDef> = {
+  w1: {
+    id: "w1",
+    total: 22,
+    lunge: { from: 1, to: 6, speed: 30 },
+    hits: [
+      { from: 6, to: 9, range: 2.4, damage: 34, effect: "reel", stun: 26, blockstun: 13, guardDamage: 9, hitstop: 6, strength: 2, meter: 5 },
+    ],
+    cancelHit: 10,
+    cancelWhiff: 16,
+    next: "a2",
+  },
+  a2: {
+    id: "a2",
+    total: 28,
+    lunge: { from: 1, to: 7, speed: 20 },
+    hits: [
+      { from: 8, to: 11, range: 2.6, damage: 48, effect: "reel", stun: 30, blockstun: 16, guardDamage: 16, hitstop: 8, strength: 2, meter: 6 },
+    ],
+    cancelHit: 12,
+    cancelWhiff: 20,
+    next: "ender",
+  },
+  armBlast: {
+    id: "armBlast",
+    total: 44,
+    nerve: 15,
+    lunge: { from: 1, to: 10, speed: 18 },
+    hits: [
+      { from: 12, to: 15, range: 2.9, damage: 95, effect: "blast", stun: 0, blockstun: 22, guardDamage: 34, hitstop: 14, strength: 3, meter: 0 },
+    ],
+    cancelHit: 18,
+    cancelWhiff: NEVER,
+  },
+  armLaunch: {
+    id: "armLaunch",
+    total: 42,
+    nerve: 15,
+    lunge: { from: 1, to: 8, speed: 18 },
+    hits: [
+      { from: 10, to: 13, range: 2.8, damage: 80, effect: "launch", stun: 0, blockstun: 20, guardDamage: 28, hitstop: 12, strength: 3, meter: 0 },
+    ],
+    cancelHit: 15,
+    cancelWhiff: NEVER,
+    jumpCancel: true,
+  },
+  armSlam: {
+    id: "armSlam",
+    total: 42,
+    nerve: 15,
+    lunge: { from: 1, to: 10, speed: 18 },
+    hits: [
+      { from: 12, to: 15, range: 2.9, damage: 88, effect: "slam", stun: 0, blockstun: 22, guardDamage: 34, hitstop: 14, strength: 3, meter: 0 },
+    ],
+    cancelHit: 18,
+    cancelWhiff: NEVER,
+  },
+  /** From guard: the brace discharges at arm's length. Slow, and it goes straight through a guard. */
+  thunderclap: {
+    id: "thunderclap",
+    total: 50,
+    lunge: { from: 10, to: 15, speed: 14 },
+    hits: [
+      { from: 16, to: 19, range: 3.3, damage: 130, effect: "blast", stun: 0, blockstun: 26, guardDamage: 100, hitstop: 16, strength: 3, meter: 0 },
+    ],
+    cancelHit: 22,
+    cancelWhiff: NEVER,
+  },
   s1: {
     id: "s1",
     total: 20,
@@ -175,6 +245,9 @@ export const dryEnder = (hb: HitBox): HitBox => ({
   guardDamage: hb.guardDamage * 0.5,
 });
 
+/** The hunter's dash is a shoulder charge. This is what it does to whoever it reaches. */
+export const TACKLE: HitBox = { from: 0, to: 0, range: 0, damage: 40, effect: "stagger", stun: 28, blockstun: 16, guardDamage: 30, hitstop: 9, strength: 2, meter: 6 };
+
 /** Hit data for projectiles, in the same shape as strike hitboxes. Damage is set per shot. */
 export const PROJ_HITS: Record<"bullet" | "quick", HitBox> = {
   bullet: { from: 0, to: 0, range: 0, damage: 14, effect: "reel", stun: 9, blockstun: 5, guardDamage: 4, hitstop: 1, strength: 1, meter: 4 },
@@ -185,16 +258,11 @@ export const PROJ_HITS: Record<"bullet" | "quick", HitBox> = {
 export const C = {
   DT: 1 / 60,
   GRAVITY: 34,
-  RUN: 8.5,
-  AIR_RUN: 7.5,
-  JUMP_V: 14.5,
   DJUMP_V: 13.5,
   ARENA_R: 75,
   BODY_R: 0.55,
 
-  HP: 2000,
   METER: 100,
-  PIPS: 4,
   PIP_REGEN: 420,
   GUARD_HP: 100,
   GUARD_REGEN: 0.35,
@@ -204,16 +272,14 @@ export const C = {
   GUARD_BREAK_STUN: 75,
   BUFFER: 9,
 
-  CHASE_COST: 15,
-  CHASE_SPEED: 95,
-  CHASE_MAX: 34,
   CHASE_STOP: 1.7,
-  MAX_CHASES: 2,
-  MAX_LAUNCHES: 2,
   STEP_SPEED: 27,
   STEP_T: 11,
   STEP_INVULN: 8,
-  STEP_CD: 26,
+  /** Nerve the thunderclap costs. */
+  CLAP_COST: 25,
+  /** How long a caught attacker is left open. */
+  CATCH_STUN: 28,
 
   // The cylinder.
   AMMO: 6,

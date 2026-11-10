@@ -159,6 +159,25 @@
   box-shadow: 0 0 8px var(--fulgur);
 }
 
+/* Dash charges: chevrons that empty as you spend them. */
+.dashes {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+.dashes b {
+  width: 11px;
+  height: 13px;
+  background: var(--ink-soft);
+  clip-path: polygon(0 0, 55% 0, 100% 50%, 55% 100%, 0 100%, 45% 50%);
+}
+.dashes b.on {
+  background: var(--paper);
+}
+.side.p1 .dashes b {
+  transform: scaleX(-1);
+}
+
 /* The revolver's cylinder: six chambers that turn as rounds are spent. */
 .cyl {
   position: relative;

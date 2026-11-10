@@ -34,14 +34,16 @@ isn't fun here, nothing built on top will save it.
 
 ### Phase 1: what exists
 
-- Gun-fu strike strings whose ender fires a round: blast away, launch or slam
+- Two kits: the heavy hunter you play, and a quick outlaw as the rival
+- The hunter's brace: walk behind it, deflect and return shots, catch a blow mid-combo, and discharge it as a blast or a guard-breaking thunderclap
+- Short, heavy strike strings ending in a blast, a launch or a slam
 - A six-round cylinder, a timed reload with a perfect window, and fanning the hammer
 - Holding steady to build Nerve and reload, and the quickdraw from the holster
 - The standoff: it opens every duel and starts again when both fighters hold steady
 - Dead or alive: the winner shoots, or ropes the loser for a bigger bounty
-- Chase dash, evasive step, jump and double jump
+- Dashes limited by charges: two for the hunter, three for the outlaw
 - Guard, perfect guard and guard break
-- Slip, with four charges that refill over time
+- Combo escapes on limited charges: the hunter catches, the outlaw vanishes
 - Lariat: pull the rival in, or zip to them
 - Awakening and the Last Word ultimate with its cinematic
 - A rival AI on three difficulties, plus a training mode
@@ -51,7 +53,8 @@ isn't fun here, nothing built on top will save it.
 ### Phase 1: what is missing or unproven
 
 - The art is placeholder and the animation is generated from key poses.
-- Only the hunter exists. Both fighters use the same kit.
+- Only the hunter is playable. The outlaw is the rival's kit.
+- The two kits are not balanced: with the AI playing both, the hunter wins about three duels in four.
 - The arena is open desert. A town street, powder barrels, dynamite and the horse
   are the next western pieces.
 - There is no music.

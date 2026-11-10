@@ -28,20 +28,25 @@ npm run build
 | Action | Keyboard | Gamepad |
 |---|---|---|
 | Move: W closes in, S backs off, A and D circle | W A S D | Left stick |
-| Strike: two pistol-whips, a spur kick, then a point-blank shot | J | X |
+| Strike: a pistol-whip, a backhand with the brace, then the brace's blast | J | X |
+| Brace up: walk behind it, bullets ring off. Tap while being hit to catch the blow | Shift | Right trigger |
+| Thunderclap: strike from behind the brace. It goes through a guard | Shift + J | Right trigger + X |
 | Shot; hold to fan the hammer | K | Y |
 | Hold steady: builds Nerve and reloads. Shot from it is a quickdraw | Q | Left trigger |
-| Dash; chases your rival from range | L | B |
-| Jump, and again in the air | Space | A |
-| Guard; tap while being hit to Slip behind them | Shift | Right trigger |
+| Shoulder charge. Two charges that return slowly | L | B |
+| Jump | Space | A |
 | Lariat; hold S to zip to them instead | E | Right bumper |
 | Last Word, with full Nerve | R | Left bumper |
 | Awaken, when the gauge is full | F | Click a stick |
 | Pause | Esc | Start |
 
-- **The cylinder holds six.** The fourth strike spends a round: hold W (up) to launch,
-  S (down) to slam, or neither to blast them away. When it runs dry, press Shot as the
-  marker crosses the gold for a fast reload.
+- **You are the wall.** The rival is faster and has more dashes. You are heavier, you
+  hit harder, and the brace on your left arm is both shield and cannon. Its blast
+  spends Nerve: on the third strike hold W (up) to launch, S (down) to slam, or
+  neither to blast them away.
+- **Time the brace.** Raise it just as a bullet lands and the shot goes back.
+- **The cylinder holds six.** When it runs dry, press Shot as the marker crosses the
+  gold for a fast reload.
 - **The standoff** opens every duel and starts again whenever you both hold steady.
   Wait for the bell, then shoot first.
 - **Dead or alive:** when the rival drops, Shot finishes it and Lariat ropes them for

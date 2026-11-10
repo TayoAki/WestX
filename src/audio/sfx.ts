@@ -167,6 +167,22 @@ export class Sfx {
       case "dryFire":
         this.tick(900, 0.3);
         break;
+      case "armBlast":
+        // Thunder at arm's length: a deep boom under a crackle.
+        this.tone(e.big ? 150 : 130, 26, e.big ? 0.9 : 0.55, e.big ? 1.0 : 0.85);
+        this.burst(e.big ? 0.7 : 0.4, 2600, 0.5, 0.6, "lowpass", 90);
+        this.burst(0.22, 7000, 1.5, 0.4, "highpass");
+        break;
+      case "deflect":
+        this.tick(3200, 0.3);
+        this.tone(2900, 2500, 0.12, 0.2, "triangle");
+        if (e.back) this.ricochet();
+        break;
+      case "armCatch":
+        this.tone(520, 500, 0.22, 0.4, "square");
+        this.tone(790, 760, 0.18, 0.25, "square");
+        this.burst(0.08, 2200, 2, 0.4);
+        break;
       case "chamber":
         this.tick(2600, 0.14);
         break;

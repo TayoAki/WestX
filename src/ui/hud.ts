@@ -1,5 +1,6 @@
 import type { Input } from "../input/input";
 import type { Difficulty } from "../sim/ai";
+import { KITS } from "../sim/kits";
 import { C } from "../sim/moves";
 import type { Button, Match, SimEvent } from "../sim/types";
 import "./hud.css";
@@ -19,19 +20,20 @@ export interface ResultStats {
 
 const MOVE_LIST = `
   <li><kbd>W A S D</kbd> Move. W closes in, A and D circle</li>
-  <li><kbd>J</kbd> Strike. Two pistol-whips, a spur kick, then a point-blank shot</li>
+  <li><kbd>J</kbd> Strike. A pistol-whip, a backhand with the brace, then the brace's blast</li>
+  <li><kbd>Shift</kbd> Raise the brace. Walk behind it; bullets ring off. Tap it while being hit to catch the blow</li>
+  <li><kbd>Shift + J</kbd> Thunderclap: slow, and it goes straight through a guard</li>
   <li><kbd>K</kbd> Shot. Hold it to fan the hammer</li>
   <li><kbd>Q</kbd> Hold steady: builds Nerve and reloads. Press K from it for a quickdraw</li>
-  <li><kbd>L</kbd> Dash. Chases your rival from range</li>
-  <li><kbd>Space</kbd> Jump, and again in the air</li>
-  <li><kbd>Shift</kbd> Guard. Tap it while being hit to Slip behind them</li>
+  <li><kbd>L</kbd> Shoulder charge. You get two; they come back slowly</li>
   <li><kbd>E</kbd> Lariat: rope them in. Hold S to zip to them</li>
-  <li><kbd>R</kbd> Last Word, with full Nerve</li>
-  <li><kbd>F</kbd> Awaken, when the gauge is full</li>`;
+  <li><kbd>Space</kbd> Jump <kbd>R</kbd> Last Word <kbd>F</kbd> Awaken</li>`;
 
 const NOTES = `
-  <p class="fine"><b>The cylinder holds six.</b> The fourth strike spends a round: hold <b>W</b> to launch them, <b>S</b> to slam them, or neither to blast them away. When it runs dry, press <b>K</b> as the marker crosses the gold for a fast reload.</p>
-  <p class="fine"><b>The standoff.</b> Every duel opens with one, and it happens again whenever you both hold steady. Wait for the bell, then shoot first. Draw early and your hand is slow.</p>`;
+  <p class="fine"><b>You are the wall.</b> The rival is faster and has more dashes. You are heavier, you hit harder, and the brace on your left arm is both shield and cannon. Its blast spends Nerve: hold <b>W</b> on the third strike to launch them, <b>S</b> to slam them, or neither to blast them away.</p>
+  <p class="fine"><b>Time the brace.</b> Raise it just as a bullet lands and the shot goes back at the shooter.</p>
+  <p class="fine"><b>Six rounds.</b> When the cylinder runs dry, press <b>K</b> as the marker crosses the gold for a fast reload.</p>
+  <p class="fine"><b>The standoff.</b> Every duel opens with one. Wait for the bell, then shoot first.</p>`;
 
 const money = (n: number): string => `$${n.toLocaleString("en-US")}`;
 
@@ -44,6 +46,7 @@ interface SideEls {
   awaken: HTMLElement;
   ready: HTMLElement;
   pips: HTMLElement[];
+  dashes: HTMLElement[];
   cyl: HTMLElement;
   chambers: HTMLElement[];
   combo: HTMLElement;
@@ -82,7 +85,8 @@ export class Hud {
         <div class="row">
           <div class="cyl" data-cyl="${i}" title="Rounds in the cylinder">${chambers}</div>
           <div class="track meter" data-metertrack="${i}" title="Nerve"><i class="fill" data-meter="${i}"></i></div>
-          <div class="pips" data-pips="${i}" title="Slip charges">${"<b></b>".repeat(C.PIPS)}</div>
+          <div class="pips" data-pips="${i}" title="Escapes from a combo">${"<b></b>".repeat(4)}</div>
+          <div class="dashes" data-dashes="${i}" title="Dashes">${"<b></b>".repeat(3)}</div>
         </div>
         <div class="track awaken"><i class="fill" data-awaken="${i}"></i></div>
       </div>`;
@@ -112,9 +116,9 @@ export class Hud {
           <div class="timer"><i data-el="verdictTimer"></i></div>
         </div>
         <div class="legend" data-el="legend" hidden>
-          <span><kbd>J</kbd>strike</span><span><kbd>K</kbd>shot, hold to fan</span><span><kbd>Q</kbd>steady, then K to quickdraw</span>
-          <span><kbd>L</kbd>dash</span><span><kbd>Space</kbd>jump</span><span><kbd>Shift</kbd>guard / slip</span>
-          <span><kbd>E</kbd>lariat</span><span><kbd>R</kbd>last word</span><span><kbd>F</kbd>awaken</span><span><kbd>H</kbd>hide</span>
+          <span><kbd>J</kbd>strike</span><span><kbd>Shift</kbd>brace: walk, deflect, catch</span><span><kbd>Shift+J</kbd>thunderclap</span>
+          <span><kbd>K</kbd>shot, hold to fan</span><span><kbd>Q</kbd>steady, then K to quickdraw</span><span><kbd>L</kbd>charge</span>
+          <span><kbd>E</kbd>lariat</span><span><kbd>Space</kbd>jump</span><span><kbd>R</kbd>last word</span><span><kbd>F</kbd>awaken</span><span><kbd>H</kbd>hide</span>
         </div>
       </div>
       <div class="touch" data-el="touch" hidden>
@@ -124,8 +128,8 @@ export class Hud {
           <button class="small" data-b="special">Lariat</button>
           <button class="small" data-b="ult">Ult</button>
           <button class="small" data-b="awaken">Awaken</button>
-          <button data-b="guard">Guard</button>
-          <button data-b="dash">Dash</button>
+          <button data-b="guard">Brace</button>
+          <button data-b="dash">Charge</button>
           <button class="big" data-b="strike">Strike</button>
           <button data-b="shot">Shot</button>
           <button data-b="jump">Jump</button>
@@ -136,7 +140,7 @@ export class Hud {
           <div class="col">
             <p class="eyebrow">Combat prototype · placeholder art</p>
             <h1>WestX<small>Duel Box</small></h1>
-            <p>One gunslinger, one rival, six rounds each. Every duel opens on the bell. This build exists to answer one question: does the fighting feel right?</p>
+            <p>A lawman with a storm-struck arm against a faster gun. You don't dance. You walk in behind the brace and end it. This build exists to answer one question: does the fighting feel right?</p>
             <div class="choices">
               <span class="label">Duel a rival</span>
               <button class="btn" data-start="easy">Easy</button>
@@ -204,6 +208,7 @@ export class Hud {
         awaken: q(`[data-awaken="${i}"]`),
         ready: q(`[data-ready="${i}"]`),
         pips: [...q(`[data-pips="${i}"]`).children] as HTMLElement[],
+        dashes: [...q(`[data-dashes="${i}"]`).children] as HTMLElement[],
         cyl,
         chambers: [...cyl.children] as HTMLElement[],
         combo,
@@ -420,6 +425,12 @@ export class Hud {
       case "hit":
         if (e.perfect) this.announce("Perfect guard", "small fulgur", 700);
         break;
+      case "deflect":
+        if (e.back) this.announce(mine(e.id) ? "Sent back" : "Deflected", "small fulgur", 700);
+        break;
+      case "armCatch":
+        this.announce(mine(e.id) ? "Caught" : "Caught you", mine(e.id) ? "small fulgur" : "small ember", 700);
+        break;
       case "guardBreak":
         this.announce("Guard break", "small ember", 800);
         break;
@@ -476,7 +487,8 @@ export class Hud {
     for (let i = 0; i < 2; i++) {
       const f = m.fighters[i];
       const s = this.sides[i];
-      const hp = Math.max(0, f.hp / C.HP);
+      const kit = KITS[f.kit];
+      const hp = Math.max(0, f.hp / f.maxHp);
       s.hp.style.transform = `scaleX(${hp})`;
       s.trail.style.transform = `scaleX(${hp})`;
       s.hpTrack.classList.toggle("low", hp < 0.3);
@@ -485,7 +497,14 @@ export class Hud {
       const aw = f.awakened > 0 ? f.awakened / C.AWAKEN_T : f.awaken / 100;
       s.awaken.style.transform = `scaleX(${aw})`;
       s.ready.hidden = !(f.awaken >= 100 && f.awakened === 0);
-      for (let p = 0; p < s.pips.length; p++) s.pips[p].classList.toggle("on", p < f.pips);
+      for (let p = 0; p < s.pips.length; p++) {
+        s.pips[p].hidden = p >= kit.pips;
+        s.pips[p].classList.toggle("on", p < f.pips);
+      }
+      for (let d = 0; d < s.dashes.length; d++) {
+        s.dashes[d].hidden = d >= kit.dashes;
+        s.dashes[d].classList.toggle("on", d < f.dashes);
+      }
 
       // The cylinder turns one chamber for every round spent.
       s.cyl.style.transform = `rotate(${(C.AMMO - f.ammo) * (360 / C.AMMO)}deg)`;

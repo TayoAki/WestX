@@ -1,4 +1,5 @@
-import { C, dryEnder, MOVES, PROJ_HITS, type HitBox } from "./moves";
+import { KITS, type Kit, type KitId } from "./kits";
+import { C, dryEnder, MOVES, PROJ_HITS, TACKLE, type HitBox } from "./moves";
 import { makeRng } from "./rng";
 import {
   BUTTONS,
@@ -82,22 +83,28 @@ export const isStunned = (f: Fighter): boolean => STUNNED.has(f.state);
 export const isFlying = (f: Fighter): boolean => FLYING.has(f.state);
 const canBeHit = (f: Fighter): boolean => f.invuln <= 0 && !UNHITTABLE.has(f.state);
 export const centerOf = (f: Fighter): V3 => v3(f.pos.x, f.pos.y + 0.95, f.pos.z);
+export const kitOf = (f: Fighter): Kit => KITS[f.kit];
 
-function createFighter(id: number, name: string, pos: V3, yaw: number): Fighter {
+function createFighter(id: number, name: string, kit: KitId, pos: V3, yaw: number): Fighter {
   const buf = {} as Record<Button, number>;
   for (const b of BUTTONS) buf[b] = 0;
+  const k = KITS[kit];
   return {
     id,
     name,
+    kit,
+    maxHp: k.hp,
     pos,
     vel: v3(),
     yaw,
     grounded: true,
-    airJumps: 1,
-    hp: C.HP,
+    airJumps: k.airJumps,
+    hp: k.hp,
     meter: 30,
-    pips: C.PIPS,
+    pips: k.pips,
     pipTimer: 0,
+    dashes: k.dashes,
+    dashTimer: 0,
     guardHp: C.GUARD_HP,
     awaken: 0,
     awakened: 0,
@@ -123,7 +130,6 @@ function createFighter(id: number, name: string, pos: V3, yaw: number): Fighter 
     zipFlag: false,
     airHang: false,
     invuln: 0,
-    stepCd: 0,
     guardT: 0,
     slowAcc: 0,
     timeScale: 1,
@@ -162,13 +168,15 @@ function createProps(m: Match): Prop[] {
 }
 
 export function createMatch(seed: number, opts: Partial<MatchOptions> = {}): Match {
+  // By default the player is the heavy hunter and the rival is the quick outlaw.
+  const kits: [KitId, KitId] = opts.kits ?? ["hunter", "outlaw"];
   const m: Match = {
     tick: 0,
     phase: "intro",
     phaseT: 0,
     fighters: [
-      createFighter(0, "Hunter", v3(0, 0, -6), 0),
-      createFighter(1, "Rival", v3(0, 0, 6), Math.PI),
+      createFighter(0, "Hunter", kits[0], v3(0, 0, -6), 0),
+      createFighter(1, "Rival", kits[1], v3(0, 0, 6), Math.PI),
     ],
     projectiles: [],
     nextProjId: 1,
@@ -182,7 +190,7 @@ export function createMatch(seed: number, opts: Partial<MatchOptions> = {}): Mat
     outcome: null,
     rng: makeRng(seed),
     events: [],
-    opts: { training: false, opening: true, ...opts },
+    opts: { training: false, opening: true, ...opts, kits },
   };
   m.props = createProps(m);
   return m;
@@ -241,7 +249,7 @@ function dealDamage(m: Match, att: Fighter | null, def: Fighter, amount: number,
   def.hp = Math.max(lethal ? 0 : 1, def.hp - amount);
   const dealt = before - def.hp;
   if (def.awakened === 0) def.awaken = Math.min(100, def.awaken + dealt * C.AWAKEN_GAIN_TAKEN);
-  if (!def.comebackUsed && def.hp > 0 && def.hp < C.HP * C.COMEBACK_AT) {
+  if (!def.comebackUsed && def.hp > 0 && def.hp < def.maxHp * C.COMEBACK_AT) {
     def.comebackUsed = true;
     if (def.awakened === 0) def.awaken = 100;
   }
@@ -346,7 +354,7 @@ function stepVerdict(m: Match, inputs: [InputFrame, InputFrame]): void {
       setState(w, "chase");
       m.events.push({ type: "chase", id: w.id, pos: clone(w.pos) });
     }
-    const stepLen = Math.min(C.CHASE_SPEED * C.DT, gap - 3.8);
+    const stepLen = Math.min(kitOf(w).chaseSpeed * C.DT, gap - 3.8);
     w.pos.x += dir.x * stepLen;
     w.pos.z += dir.z * stepLen;
     w.pos.y = Math.max(0, w.pos.y + clamp(l.pos.y - w.pos.y, -stepLen, stepLen));
@@ -400,8 +408,8 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
   const contact = scale(add(centerOf(att), centerOf(def)), 0.5);
   const pos = projectile ? centerOf(def) : contact;
 
-  // Light shots cannot stop a chase dash.
-  if (projectile && hb.strength === 1 && def.state === "chase") return false;
+  // Light shots cannot stop a chase dash, or a thunderclap once it is coming.
+  if (projectile && hb.strength === 1 && (def.state === "chase" || def.move === "thunderclap")) return false;
 
   if (def.state === "guard" || def.state === "blockstun") {
     const perfect = def.state === "guard" && def.guardT <= C.PERFECT_WINDOW;
@@ -414,6 +422,14 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
       m.hitstop = Math.max(m.hitstop, 10);
       m.events.push({ type: "hit", att: att.id, def: def.id, pos, strength: 2, effect: hb.effect, damage: 0, blocked: true, perfect: true, projectile });
       return true;
+    }
+    // The brace turns light shots aside: no chip, barely a dent in the guard, no break in stride.
+    if (projectile && hb.strength === 1 && kitOf(def).deflect && def.state === "guard") {
+      def.guardHp -= hb.guardDamage * 0.25;
+      if (def.guardHp > 0) {
+        m.events.push({ type: "deflect", id: def.id, pos, back: false });
+        return true;
+      }
     }
     const chip = dealDamage(m, att, def, hb.damage * mult * C.CHIP, false);
     def.guardHp -= hb.guardDamage;
@@ -441,7 +457,7 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
   def.meter = Math.min(C.METER, def.meter + hb.meter * 0.5);
 
   let effect = hb.effect;
-  if (effect === "launch" && att.combo.launches >= C.MAX_LAUNCHES) effect = "blast";
+  if (effect === "launch" && att.combo.launches >= kitOf(att).maxLaunches) effect = "blast";
 
   if (def.hp <= 0) {
     m.hitstop = Math.max(m.hitstop, 14);
@@ -514,9 +530,9 @@ function resolveStrikes(m: Match): void {
       if (d > hb.range || Math.abs(o.pos.y - f.pos.y) > 1.8) continue;
       const dir = toTarget(f, o);
       if (d > 0.8 && Math.abs(angleDiff(yawOf(dir), f.yaw)) > 1.75) continue;
-      // An ender only sends them flying if a round went off behind it.
+      // An ender only sends them flying if a round, or the brace, went off behind it.
       let mult = 1;
-      if (mv.round) {
+      if (mv.round || mv.nerve) {
         if (f.enderLive) mult = f.enderMult;
         else hb = dryEnder(hb);
       }
@@ -559,7 +575,7 @@ function fireBullet(m: Match, f: Fighter, o: Fighter, kind: ShotKind): void {
 function doJump(m: Match, f: Fighter, o: Fighter, forced = false): void {
   let vy = 0;
   let double = false;
-  if (f.grounded) vy = C.JUMP_V;
+  if (f.grounded) vy = kitOf(f).jumpV;
   else if (f.airJumps > 0 || forced) {
     if (!forced) f.airJumps--;
     vy = C.DJUMP_V;
@@ -578,23 +594,24 @@ function doJump(m: Match, f: Fighter, o: Fighter, forced = false): void {
 }
 
 function startChase(m: Match, f: Fighter): void {
-  f.meter -= C.CHASE_COST;
+  f.dashes--;
   setState(f, "chase");
   f.vel = v3();
   m.events.push({ type: "chase", id: f.id, pos: clone(f.pos) });
 }
 
-/** Dash button: a homing chase when there is distance and Nerve, otherwise a short evasive step. */
+/** Dash button: a homing chase when there is distance, otherwise a short evasive step. Either spends a dash charge. */
 function startDash(m: Match, f: Fighter, o: Fighter, inp: InputFrame): boolean {
+  if (f.dashes <= 0) return false;
   const fwd = toTarget(f, o);
   const hasDir = Math.hypot(inp.mx, inp.my) > 0.4;
   const evasive = hasDir && (Math.abs(inp.mx) > 0.4 || inp.my < -0.4);
   const d = dist(f.pos, o.pos);
-  if (!evasive && d > 3.2 && f.meter >= C.CHASE_COST) {
+  if (!evasive && d > 3.2) {
     startChase(m, f);
     return true;
   }
-  if (f.stepCd > 0) return false;
+  f.dashes--;
   let dir: V3;
   if (hasDir) {
     const right = rightOf(fwd);
@@ -605,7 +622,6 @@ function startDash(m: Match, f: Fighter, o: Fighter, inp: InputFrame): boolean {
   setState(f, "step");
   f.stepDir = dir;
   f.invuln = Math.max(f.invuln, C.STEP_INVULN);
-  f.stepCd = C.STEP_CD;
   f.vel = v3(dir.x * C.STEP_SPEED, 0, dir.z * C.STEP_SPEED);
   m.events.push({ type: "step", id: f.id, pos: clone(f.pos) });
   return true;
@@ -623,6 +639,22 @@ function startBurst(m: Match, f: Fighter): void {
 function trySlip(m: Match, f: Fighter, o: Fighter): boolean {
   if (f.pips <= 0 || !consume(f, "guard")) return false;
   f.pips--;
+  if (kitOf(f).breaker === "catch") {
+    // The hunter does not vanish. He catches the blow, and the attacker is the one left open.
+    toFree(f);
+    f.vel = v3();
+    f.invuln = 14;
+    f.yaw = yawOf(toTarget(f, o));
+    if (dist(f.pos, o.pos) < 4.5 && canBeHit(o)) {
+      const dir = toTarget(f, o);
+      setState(o, "parried", C.CATCH_STUN);
+      o.vel = v3(dir.x * 6, 0, dir.z * 6);
+    }
+    m.hitstop = Math.max(m.hitstop, 10);
+    m.events.push({ type: "armCatch", id: f.id, pos: centerOf(f) });
+    endCombo(m, o);
+    return true;
+  }
   setState(f, "slip");
   f.vel = v3();
   f.invuln = C.SLIP_T + 8;
@@ -849,7 +881,7 @@ function freeLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
     return;
   }
   if (consume(f, "dash") && startDash(m, f, o, inp)) return;
-  if (consume(f, "strike")) return startMove(f, o, "s1");
+  if (consume(f, "strike")) return startMove(f, o, kitOf(f).string[0]);
   if (inp.steady && f.grounded) {
     setState(f, "steady");
     stopH(f);
@@ -866,7 +898,8 @@ function freeLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
     mx /= l;
     my /= l;
   }
-  const speed = f.grounded ? C.RUN : C.AIR_RUN;
+  const k = kitOf(f);
+  const speed = f.grounded ? k.run : k.airRun;
   const right = rightOf(fwd);
   f.vel.x = (fwd.x * my + right.x * mx) * speed;
   f.vel.z = (fwd.z * my + right.z * mx) * speed;
@@ -900,7 +933,7 @@ function steadyLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
     f.buf.dash = 0;
     toFree(f);
     startDash(m, f, o, inp);
-  } else if (consume(f, "strike")) startMove(f, o, "s1");
+  } else if (consume(f, "strike")) startMove(f, o, kitOf(f).string[0]);
   else if (!inp.steady) toFree(f);
 }
 
@@ -956,6 +989,18 @@ function attackLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
       m.events.push({ type: "dryFire", id: f.id, pos });
     }
   }
+  // The hunter's ender discharges the brace. No Nerve, no blast.
+  if (mv.nerve && f.mf === mv.hits[0].from) {
+    f.enderLive = f.meter >= mv.nerve;
+    f.enderMult = 1;
+    if (f.enderLive) {
+      f.meter -= mv.nerve;
+      m.events.push({ type: "armBlast", id: f.id, pos: add(centerOf(f), scale(dirOfYaw(f.yaw), 1.1)), dir: dirOfYaw(f.yaw), big: false });
+    }
+  }
+  if (f.move === "thunderclap" && f.mf === mv.hits[0].from) {
+    m.events.push({ type: "armBlast", id: f.id, pos: add(centerOf(f), scale(dirOfYaw(f.yaw), 1.3)), dir: dirOfYaw(f.yaw), big: true });
+  }
 
   if (mv.fireAt === f.mf) {
     if (f.move === "quickdraw") {
@@ -971,8 +1016,8 @@ function attackLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
   const canCancel = f.mf >= (f.moveHit ? mv.cancelHit : mv.cancelWhiff);
   if (canCancel) {
     if (mv.next && consume(f, "strike")) {
-      const nextId: MoveId =
-        mv.next === "ender" ? (inp.tilt > 0.5 ? "enderLaunch" : inp.tilt < -0.5 ? "enderSlam" : "enderBlast") : mv.next;
+      const e = kitOf(f).enders;
+      const nextId: MoveId = mv.next === "ender" ? (inp.tilt > 0.5 ? e.launch : inp.tilt < -0.5 ? e.slam : e.blast) : mv.next;
       return startMove(f, o, nextId);
     }
     if (f.moveHit) {
@@ -1000,17 +1045,18 @@ function attackLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
         setState(f, "attack");
         f.move = move;
       }
-      if (f.move === "lariat" && consume(f, "strike")) return startMove(f, o, "s1");
+      if (f.move === "lariat" && consume(f, "strike")) return startMove(f, o, kitOf(f).string[0]);
     }
   }
   if (f.mf >= mv.total) toFree(f);
 }
 
 function chaseLogic(m: Match, f: Fighter, o: Fighter): void {
+  const k = kitOf(f);
   const d3 = sub(o.pos, f.pos);
   let L = len(d3);
   if (L > C.CHASE_STOP) {
-    const stepLen = Math.min(C.CHASE_SPEED * C.DT, L - C.CHASE_STOP);
+    const stepLen = Math.min(k.chaseSpeed * C.DT, L - C.CHASE_STOP);
     const dir = scale(d3, 1 / L);
     f.pos = add(f.pos, scale(dir, stepLen));
     f.pos.y = Math.max(0, f.pos.y);
@@ -1018,14 +1064,21 @@ function chaseLogic(m: Match, f: Fighter, o: Fighter): void {
     f.yaw = yawOf(normH(d3, dirOfYaw(f.yaw)));
     L -= stepLen;
   }
-  if (L > C.CHASE_STOP + 0.2 && f.t < C.CHASE_MAX) return;
-  // Arrived. Catching an opponent mid-flight holds them in place for a follow-up.
-  if (L <= C.CHASE_STOP + 0.2 && isFlying(o) && f.combo.hits > 0 && f.combo.chases < C.MAX_CHASES) {
-    f.combo.chases++;
-    setState(o, "hitstun", 32);
-    o.vel = v3();
-    o.airHang = o.pos.y > 0.05;
-    m.events.push({ type: "chaseCatch", id: f.id, pos: centerOf(o) });
+  const arrived = L <= C.CHASE_STOP + 0.2;
+  if (!arrived && f.t < k.chaseFrames) return;
+  if (arrived && isFlying(o)) {
+    // Catching an opponent mid-flight holds them in place for a follow-up.
+    if (f.combo.hits > 0 && f.combo.chases < k.maxChases) {
+      f.combo.chases++;
+      setState(o, "hitstun", 32);
+      o.vel = v3();
+      o.airHang = o.pos.y > 0.05;
+      m.events.push({ type: "chaseCatch", id: f.id, pos: centerOf(o) });
+    }
+  } else if (arrived && k.tackle) {
+    // The hunter's dash is a shoulder charge: it hits whoever it reaches.
+    applyHit(m, f, o, TACKLE, toTarget(f, o), false);
+    if (f.state !== "chase") return;
   }
   toFree(f);
   f.vel = v3();
@@ -1087,6 +1140,36 @@ function stunLogic(m: Match, f: Fighter, o: Fighter): void {
   }
 }
 
+function guardLogic(f: Fighter, o: Fighter, inp: InputFrame): void {
+  const k = kitOf(f);
+  const fwd = toTarget(f, o);
+  f.guardT++;
+  f.yaw = yawOf(fwd);
+  if (!f.grounded) {
+    f.vel.x *= 0.9;
+    f.vel.z *= 0.9;
+  } else if (k.guardWalk > 0) {
+    // The hunter advances behind the brace.
+    let mx = inp.mx;
+    let my = inp.my;
+    const l = Math.hypot(mx, my);
+    if (l > 1) {
+      mx /= l;
+      my /= l;
+    }
+    const right = rightOf(fwd);
+    const speed = k.run * k.guardWalk;
+    f.vel.x = (fwd.x * my + right.x * mx) * speed;
+    f.vel.z = (fwd.z * my + right.z * mx) * speed;
+  } else stopH(f);
+  // Strike from behind the brace is the thunderclap.
+  if (k.thunderclap && f.meter >= C.CLAP_COST && consume(f, "strike")) {
+    f.meter -= C.CLAP_COST;
+    return startMove(f, o, "thunderclap");
+  }
+  if (!inp.guard && f.t >= 4) toFree(f);
+}
+
 function knockDown(m: Match, f: Fighter, quiet: boolean): void {
   setState(f, "knockdown", C.KNOCKDOWN_T);
   if (!quiet) m.events.push({ type: "land", id: f.id, pos: clone(f.pos), hard: true });
@@ -1095,7 +1178,6 @@ function knockDown(m: Match, f: Fighter, quiet: boolean): void {
 function logic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
   f.t++;
   if (f.invuln > 0) f.invuln--;
-  if (f.stepCd > 0) f.stepCd--;
   if (f.shotCd > 0) f.shotCd--;
   if (f.shotPose > 0) f.shotPose--;
   workReload(m, f);
@@ -1120,14 +1202,7 @@ function logic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
       chaseLogic(m, f, o);
       break;
     case "guard":
-      f.guardT++;
-      f.yaw = yawOf(toTarget(f, o));
-      if (f.grounded) stopH(f);
-      else {
-        f.vel.x *= 0.9;
-        f.vel.z *= 0.9;
-      }
-      if (!inp.guard && f.t >= 4) toFree(f);
+      guardLogic(f, o, inp);
       break;
     case "blockstun":
       f.vel.x *= 0.8;
@@ -1240,7 +1315,7 @@ function physics(m: Match, f: Fighter): void {
     if (!f.grounded && f.vel.y <= 0) {
       const hard = f.vel.y < -22;
       f.grounded = true;
-      f.airJumps = 1;
+      f.airJumps = kitOf(f).airJumps;
       if (f.state === "free" || f.state === "attack" || f.state === "guard") {
         m.events.push({ type: "land", id: f.id, pos: clone(f.pos), hard });
       }
@@ -1264,7 +1339,17 @@ function updateProjectiles(m: Match): void {
     if (alive && canBeHit(def) && segPointDist(p.prev, p.pos, centerOf(def)) <= p.radius + 0.7) {
       const dir = normH(p.vel, dirOfYaw(att.yaw));
       if (p.kind === "bullet" || p.kind === "quick") {
-        if (applyHit(m, att, def, { ...PROJ_HITS[p.kind], damage: p.damage }, dir, true)) alive = false;
+        if (kitOf(def).deflect && def.state === "guard" && def.guardT <= C.PERFECT_WINDOW) {
+          // Caught on the brace at the perfect moment: the shot goes back where it came from.
+          const speed = len(p.vel);
+          p.owner = def.id;
+          p.vel = scale(norm(sub(centerOf(att), p.pos), scale(dir, -1)), speed);
+          p.life = C.BULLET_LIFE;
+          assign(p.prev, p.pos);
+          def.meter = Math.min(C.METER, def.meter + 8);
+          m.hitstop = Math.max(m.hitstop, 6);
+          m.events.push({ type: "deflect", id: def.id, pos: clone(p.pos), back: true });
+        } else if (applyHit(m, att, def, { ...PROJ_HITS[p.kind], damage: p.damage }, dir, true)) alive = false;
       } else if (p.kind === "lasso") {
         rope(m, att, def);
         alive = false;
@@ -1367,11 +1452,20 @@ function collideWorld(m: Match): void {
 function upkeep(m: Match): void {
   for (const f of m.fighters) {
     const o = m.fighters[1 - f.id];
-    if (f.pips < C.PIPS) {
+    const k = kitOf(f);
+    if (f.pips < k.pips) {
       f.pipTimer += f.awakened > 0 ? 2 : 1;
       if (f.pipTimer >= C.PIP_REGEN) {
         f.pips++;
         f.pipTimer = 0;
+      }
+    }
+    // Dashes come back one at a time. Running dry is a real cost.
+    if (f.dashes < k.dashes) {
+      f.dashTimer += f.awakened > 0 ? 2 : 1;
+      if (f.dashTimer >= k.dashRegen) {
+        f.dashes++;
+        f.dashTimer = 0;
       }
     }
     if (f.state !== "guard" && f.state !== "blockstun") {
@@ -1391,7 +1485,7 @@ function upkeep(m: Match): void {
     }
     if (f.combo.hits > 0 && !isStunned(o) && o.state !== "cine") {
       endCombo(m, f);
-      if (m.opts.training && o.id === 1 && m.phase === "fight") o.hp = C.HP;
+      if (m.opts.training && o.id === 1 && m.phase === "fight") o.hp = o.maxHp;
     }
     if (m.opts.training && f.id === 0) {
       f.meter = Math.min(C.METER, f.meter + 0.6);
