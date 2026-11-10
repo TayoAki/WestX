@@ -1,5 +1,6 @@
 // Smoke test for the built game: it must boot without errors, run its demo
-// fight, start a duel from the menu, and land a strike from keyboard input.
+// fight, start a duel from the menu, land a strike from keyboard input, and
+// then ride out into open country and walk.
 // Run `npm run build` first. Needs Playwright with Chromium available.
 import { launch, serve } from "./serve.mjs";
 
@@ -21,7 +22,7 @@ const wait = (fn, arg, ms = 60000) => page.waitForFunction(fn, arg, { timeout: m
 
 await page.goto(`${site.url}/?lowres`);
 if (!(await wait(() => window.__westx?.match?.tick > 30))) await fail("the demo fight did not start");
-if (!(await page.isVisible('[data-start="normal"]'))) await fail("the menu is not showing");
+if (!(await page.isVisible('[data-start="duel"]'))) await fail("the menu is not showing");
 
 await page.click('[data-start="training"]');
 if (!(await wait(() => window.__westx.mode === "training" && window.__westx.match.phase === "fight"))) await fail("the duel did not start");
@@ -43,6 +44,22 @@ if (!landed) await fail("J did not land a strike");
 
 await page.keyboard.press("Escape");
 if (!(await wait(() => window.__westx.paused === true, null, 5000))) await fail("Escape did not pause");
+
+await page.click('[data-el="quit"]');
+await page.click('[data-start="roam"]');
+if (!(await wait(() => window.__westx.mode === "roam" && window.__westx.match.phase === "fight"))) await fail("open country did not start");
+const cast = await page.evaluate(() => {
+  const m = window.__westx.match;
+  return { fighters: m.fighters.length, rigs: window.__westx.rigs.length, leaders: m.fighters.filter((f) => f.rank === "named").length };
+});
+if (cast.fighters < 10 || cast.rigs !== cast.fighters || cast.leaders !== 3) await fail(`open country has the wrong cast: ${JSON.stringify(cast)}`);
+await page.keyboard.down("KeyW");
+const walked = await wait(() => {
+  const h = window.__westx.match.fighters[0];
+  return Math.hypot(h.pos.x, h.pos.z) > 4;
+});
+await page.keyboard.up("KeyW");
+if (!walked) await fail("W did not move the hero in open country");
 
 if (errors.length) await fail("console errors");
 console.log("smoke ok");

@@ -5,15 +5,18 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
 import { CreateCapsule } from "@babylonjs/core/Meshes/Builders/capsuleBuilder";
 import { CreateCylinder } from "@babylonjs/core/Meshes/Builders/cylinderBuilder";
+import { CreateDisc } from "@babylonjs/core/Meshes/Builders/discBuilder";
+import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
 import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import "@babylonjs/core/Rendering/outlineRenderer";
 import type { Scene } from "@babylonjs/core/scene";
 import type { KitId } from "../sim/kits";
+import { isUp } from "../sim/match";
 import type { Fighter, Match } from "../sim/types";
 import { choosePose, JOINTS, type Joint, type Pose, type RigClock } from "./poses";
-import { makeGlow } from "./stage";
+import { makeGlow, noGlow } from "./stage";
 import { makeToon } from "./toon";
 
 // A fighter drawn from primitives: capsule limbs, a poncho and a wide-brimmed
@@ -37,7 +40,28 @@ export const KIT_PALETTE: Record<KitId, Palette> = {
   witch: { poncho: "#5a3b8c", shirt: "#3b2a55", legs: "#2c2140", boots: "#1a1326", skin: "#d9a57c", hat: "#2a2040", band: "#c77dff", aura: "#c77dff" },
   engineer: { poncho: "#8a5a34", shirt: "#d8c9a0", legs: "#5b4a3a", boots: "#2b211b", skin: "#b9805a", hat: "#6b4a2e", band: "#b5e853", aura: "#b5e853" },
   outlaw: { poncho: "#b8323f", shirt: "#33293a", legs: "#3d2c36", boots: "#1c1418", skin: "#e2ae82", hat: "#2a2030", band: "#ff4a6e", aura: "#ff4a6e" },
+  // Rabble wear their leader's colours: see crewPalette.
+  thug: { poncho: "#6d5a4c", shirt: "#8a7662", legs: "#4a3d36", boots: "#241b18", skin: "#cf9a72", hat: "#3a2f2a", band: "#b8a48a", aura: "#b8a48a" },
+  gunhand: { poncho: "#5a5248", shirt: "#a39274", legs: "#40362f", boots: "#241b18", skin: "#d8a47c", hat: "#57463a", band: "#b8a48a", aura: "#b8a48a" },
 };
+
+/** A crew dresses drab, with its leader's colour on the poncho and the hatband, so you can tell whose it is. */
+export function crewPalette(kit: KitId, leader: Palette): Palette {
+  const drab = Color3.FromHexString(KIT_PALETTE[kit].poncho);
+  const theirs = Color3.FromHexString(leader.poncho);
+  return { ...KIT_PALETTE[kit], poncho: Color3.Lerp(drab, theirs, 0.55).toHexString(), band: leader.aura, aura: leader.aura };
+}
+
+/** Materials every fighter shares: the shadow under them and the health bar over them. */
+const SHARED = new WeakMap<Scene, { shadow: StandardMaterial; barBack: StandardMaterial; barFill: StandardMaterial }>();
+function shared(scene: Scene) {
+  let s = SHARED.get(scene);
+  if (!s) {
+    s = { shadow: makeGlow(scene, "shadowMat", "#150f1c", 0.42), barBack: makeGlow(scene, "barBackMat", "#1a1320", 0.75), barFill: makeGlow(scene, "barFillMat", "#ff4a6e") };
+    SHARED.set(scene, s);
+  }
+  return s;
+}
 
 const OUTLINE = Color3.FromHexString("#1a1320");
 
@@ -57,6 +81,11 @@ export class Rig {
   private handGuns: Mesh[] = [];
   private hipGuns: Mesh[] = [];
   private lastPos = new Vector3();
+  private shadow: Mesh;
+  private bar: TransformNode;
+  private barFill: Mesh;
+  /** Seconds one of the rabble has been lying where they fell. */
+  private gone = 0;
   /** World position of the gun hand, for muzzle flashes and the lasso. */
   readonly hand: TransformNode;
   /** World position of the brace fist, for the hunter's arm effects. */
@@ -68,6 +97,8 @@ export class Rig {
     readonly id: number,
     palette: Palette,
     kit: KitId,
+    /** Rabble are drawn more cheaply: there are a lot of them. */
+    lite = false,
   ) {
     this.auraColor = Color3.FromHexString(palette.aura);
     const mat = (key: string, hex: string) => {
@@ -95,7 +126,7 @@ export class Rig {
       mesh.position.set(x, y, z);
       mesh.material = material;
       mesh.isPickable = false;
-      if (outline > 0) {
+      if (outline > 0 && !lite) {
         mesh.renderOutline = true;
         mesh.outlineWidth = outline;
         mesh.outlineColor = OUTLINE;
@@ -107,6 +138,7 @@ export class Rig {
       CreateCapsule(`f${id}-${name}`, { height, radius, tessellation: 10, capSubdivisions: 4 }, scene);
 
     this.root = new TransformNode(`f${id}-root`, scene);
+    if (lite) this.root.scaling.setAll(0.93);
     const body = node("body", this.root, 0, 0.95, 0);
     this.nodes.body = body;
     part(CreateBox(`f${id}-pelvis`, { width: 0.36, height: 0.22, depth: 0.24 }, scene), body, legs, 0, 0, 0);
@@ -203,6 +235,9 @@ export class Rig {
         const copper = mat("copper", "#b66a3c");
         part(CreateCylinder(`f${id}-gauntlet`, { height: 0.34, diameter: 0.25, tessellation: 8 }, scene), elbow, copper, 0, -0.17, 0, 0.026);
         part(CreateSphere(`f${id}-knuckle`, { diameter: 0.2, segments: 8 }, scene), elbow, copper, 0, -0.38, 0, 0.022);
+      } else if (kit === "thug" || (kit === "gunhand" && side < 0)) {
+        // Bare hands. A thug has two; a gunhand keeps one free.
+        part(CreateSphere(`f${id}-hand${s}`, { diameter: 0.15, segments: 8 }, scene), elbow, skin, 0, -0.31, 0);
       } else {
         part(CreateSphere(`f${id}-hand${s}`, { diameter: 0.14, segments: 8 }, scene), elbow, skin, 0, -0.31, 0);
         // A revolver in the hand, pointing along the forearm.
@@ -237,6 +272,27 @@ export class Rig {
     this.aura.position.y = 1.35;
     this.aura.isPickable = false;
     this.aura.setEnabled(false);
+
+    // A soft shadow on the ground, and a health bar overhead for anyone who is not the hero.
+    const mats = shared(scene);
+    this.shadow = CreateDisc(`f${id}-shadow`, { radius: 0.72, tessellation: 18 }, scene);
+    this.shadow.rotation.x = Math.PI / 2;
+    this.shadow.material = mats.shadow;
+    this.shadow.isPickable = false;
+    this.bar = new TransformNode(`f${id}-bar`, scene);
+    this.bar.billboardMode = TransformNode.BILLBOARDMODE_ALL;
+    const back = CreatePlane(`f${id}-barBack`, { width: 0.96, height: 0.13 }, scene);
+    back.material = mats.barBack;
+    this.barFill = CreatePlane(`f${id}-barFill`, { width: 0.9, height: 0.075 }, scene);
+    this.barFill.material = mats.barFill;
+    for (const mesh of [back, this.barFill]) {
+      mesh.parent = this.bar;
+      mesh.isPickable = false;
+      noGlow(scene, mesh);
+    }
+    noGlow(scene, this.shadow);
+    this.barFill.position.z = -0.01;
+    this.bar.setEnabled(false);
   }
 
   /** White flash on taking a hit. */
@@ -272,9 +328,30 @@ export class Rig {
     clock.tumble = tumbling ? clock.tumble + dt * 13 : 0;
 
     const res = choosePose(f, m, clock, speed);
+    // Rabble who have been thrown out of the fight lie where they land for a moment, then they are gone.
+    this.gone = f.rank === "rabble" && f.state === "ko" && f.grounded ? this.gone + dt : 0;
+    if (this.gone > 3.5) res.hidden = true;
     this.root.setEnabled(!res.hidden);
     this.root.position.set(x, y, z);
     this.root.rotation.y = f.yaw;
+
+    // The shadow stays on the ground, and thins out as the fighter leaves it.
+    this.shadow.setEnabled(!res.hidden);
+    this.shadow.position.set(x, 0.04, z);
+    this.shadow.scaling.setAll(Math.max(0.35, 1 - y * 0.05));
+    this.shadow.visibility = Math.max(0.25, 1 - y * 0.06);
+
+    // Health bars are for the brawl. Anything staged (a standoff, an ultimate, a verdict) plays without them.
+    const brawl = m.opts.mode === "roam" && m.phase === "fight" && !m.standoff && !m.cine;
+    const shown = brawl && f.rank !== "hero" && isUp(f) && !res.hidden && (f.hp < f.maxHp || m.fighters[0].target === f.id);
+    this.bar.setEnabled(shown);
+    if (shown) {
+      const k = Math.max(0, f.hp / f.maxHp);
+      this.bar.position.set(x, y + 2.35, z);
+      this.barFill.scaling.x = Math.max(0.001, k);
+      // Empties from the right, like the bars at the top of the screen.
+      this.barFill.position.x = -0.45 * (1 - k);
+    }
 
     const k = 1 - Math.exp(-res.rate * dt);
     const target: Pose = res.pose;
@@ -326,6 +403,8 @@ export class Rig {
   /** Removes the fighter from the scene, for when the classes change between matches. */
   dispose(): void {
     this.root.dispose(false, true);
+    this.shadow.dispose(false, false);
+    this.bar.dispose(false, false);
   }
 
   /** Centre of mass in world space, for effects. */

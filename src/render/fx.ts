@@ -11,8 +11,11 @@ import { CreateDisc } from "@babylonjs/core/Meshes/Builders/discBuilder";
 import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
 import { CreateTorus } from "@babylonjs/core/Meshes/Builders/torusBuilder";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
+import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { ParticleSystem } from "@babylonjs/core/Particles/particleSystem";
 import type { Scene } from "@babylonjs/core/scene";
+import { isUp, targetOf } from "../sim/match";
+import { C } from "../sim/moves";
 import { STATUSES, type Match, type PropKind, type SimEvent, type StatusId, type ZoneKind } from "../sim/types";
 import type { V3 } from "../sim/vec";
 import type { Rig } from "./rig";
@@ -20,12 +23,13 @@ import { makeGlow, type Stage } from "./stage";
 import { makeToon } from "./toon";
 
 // Everything that sells an impact: sparks, shock rings, starbursts, dust,
-// afterimages, craters, debris, bullets and the lasso. All pooled and
-// generated in code.
+// afterimages, craters, debris, bullets, the lasso, the sentry and its
+// lightning. All pooled and generated in code.
 
 const WHITE = Color3.White();
 const FULGUR = Color3.FromHexString("#5ef2ff");
 const SAND = new Color3(0.86, 0.66, 0.46);
+const EMBER = Color3.FromHexString("#ff7a3d");
 const ADD = 1;
 /** Colours for conditions and for the areas that cause them. */
 const STATUS_COLOR: Record<StatusId, Color3> = {
@@ -36,8 +40,22 @@ const STATUS_COLOR: Record<StatusId, Color3> = {
 const ZONE_COLOR: Record<ZoneKind, Color3> = {
   hex: STATUS_COLOR.hex,
   storm: Color3.FromHexString("#e9d6ff"),
-  gas: STATUS_COLOR.poison,
 };
+
+/** The engineer's sentry: three legs, a body that turns, a barrel and a lit eye. */
+interface TurretView {
+  id: number;
+  root: TransformNode;
+  head: TransformNode;
+  eye: StandardMaterial;
+}
+
+/** One jump of chain lightning, drawn for an instant. */
+interface Arc {
+  mesh: Mesh;
+  mat: StandardMaterial;
+  life: number;
+}
 
 /** A marked area on the ground: a rim that shows its reach and a disc that fills as the fuse burns. */
 interface ZoneView {
@@ -152,20 +170,26 @@ export class Fx {
   private ults: Mesh[] = [];
   private loops: Mesh[] = [];
   private ropes: Mesh[] = [];
-  private ghostTimer = [0, 0];
-  private steadyTimer = [0, 0];
-  private statusTimer = [0, 0];
+  private ghostTimer: number[] = [];
+  private steadyTimer: number[] = [];
+  private statusTimer: number[] = [];
+  /** The fighters who get an aura and a rope of their own: the hero and the leaders. */
+  private majors: number[] = [];
+  /** The last two to face each other in a standoff. */
+  private pair: [number, number] = [0, 1];
+  private turretViews: TurretView[] = [];
+  private arcs: Arc[] = [];
+  private arcI = 0;
+  /** A ring on the ground under whoever the hero is facing. */
+  private lock: Mesh;
+  private rigs: Rig[] = [];
   private zoneViews: ZoneView[] = [];
   private bolts: Mesh[] = [];
   private boltMats: StandardMaterial[] = [];
   private tmp = new Vector3();
   private tmp2 = new Vector3();
 
-  constructor(
-    scene: Scene,
-    stage: Stage,
-    private rigs: [Rig, Rig],
-  ) {
+  constructor(scene: Scene, stage: Stage) {
     // Areas: a pool of rims and discs, recoloured per use.
     for (let i = 0; i < 8; i++) {
       const rim = CreateTorus(`zoneRim${i}`, { diameter: 2, thickness: 0.05, tessellation: 48 }, scene);
@@ -181,7 +205,7 @@ export class Fx {
       }
       this.zoneViews.push({ id: -1, kind: "hex", rim, disc, discMat, radius: 1, fuse: 1, t: 0, erupted: false, puff: 0 });
     }
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 9; i++) {
       const bolt = CreateCapsule(`bolt${i}`, { height: 1.1, radius: 0.28, tessellation: 8, capSubdivisions: 3 }, scene);
       bolt.rotation.x = Math.PI / 2;
       bolt.bakeCurrentTransformIntoVertices();
@@ -254,7 +278,7 @@ export class Fx {
     };
     for (let i = 0; i < 4; i++) this.sparks.push(particles(`sparks${i}`, 160, dot, true));
     for (let i = 0; i < 3; i++) this.dusts.push(particles(`dust${i}`, 90, puff, false));
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 4; i++) {
       const ps = particles(`aura${i}`, 220, dot, true);
       const pos = new Vector3(0, -50, 0);
       ps.emitter = pos;
@@ -267,10 +291,7 @@ export class Fx {
       ps.minSize = 0.12;
       ps.maxSize = 0.42;
       ps.gravity = new Vector3(0, 9, 0);
-      const c = rigs[i].auraColor;
-      ps.color1 = new Color4(c.r, c.g, c.b, 0.9);
       ps.color2 = new Color4(1, 1, 1, 0.8);
-      ps.colorDead = new Color4(c.r, c.g * 0.5, c.b * 0.5, 0);
       this.auras.push(ps);
       this.auraPos.push(pos);
     }
@@ -340,14 +361,14 @@ export class Fx {
     }
 
     const bulletMat = makeGlow(scene, "bulletMat", "#fff3b0");
-    for (let i = 0; i < 14; i++) {
+    for (let i = 0; i < 28; i++) {
       const b = CreateBox(`bullet${i}`, { width: 0.07, height: 0.07, depth: 2.4 }, scene);
       b.material = bulletMat;
       b.isPickable = false;
       b.setEnabled(false);
       this.bullets.push(b);
     }
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 4; i++) {
       // The quickdraw: a long white-hot streak.
       const q = CreateBox(`quick${i}`, { width: 0.16, height: 0.16, depth: 7 }, scene);
       q.material = makeGlow(scene, `quickMat${i}`, "#fff6d8");
@@ -374,8 +395,50 @@ export class Fx {
       rope.isPickable = false;
       rope.setEnabled(false);
       this.ropes.push(rope);
-
     }
+
+    // Sentries. Two is plenty: one for the hero, one for a leader who builds.
+    const steel = makeToon(scene, "turretSteel", "#4a4352");
+    const copper = makeToon(scene, "turretCopper", "#b66a3c");
+    for (let i = 0; i < 2; i++) {
+      const root = new TransformNode(`turret${i}`, scene);
+      const piece = (mesh: Mesh, parent: TransformNode, mat: ShaderMaterial | StandardMaterial): Mesh => {
+        mesh.parent = parent;
+        mesh.material = mat;
+        mesh.isPickable = false;
+        return mesh;
+      };
+      for (let leg = 0; leg < 3; leg++) {
+        const a = (leg / 3) * Math.PI * 2;
+        const m = piece(CreateCylinder(`turret${i}leg${leg}`, { height: 1.0, diameter: 0.07, tessellation: 6 }, scene), root, steel);
+        m.position.set(Math.sin(a) * 0.3, 0.42, Math.cos(a) * 0.3);
+        m.rotation.set(Math.cos(a) * 0.55, 0, -Math.sin(a) * 0.55);
+      }
+      const head = new TransformNode(`turret${i}head`, scene);
+      head.parent = root;
+      head.position.y = C.TURRET_H;
+      piece(CreateBox(`turret${i}body`, { width: 0.36, height: 0.3, depth: 0.42 }, scene), head, copper);
+      const barrel = piece(CreateCylinder(`turret${i}barrel`, { height: 0.62, diameter: 0.1, tessellation: 8 }, scene), head, steel);
+      barrel.rotation.x = Math.PI / 2;
+      barrel.position.z = 0.48;
+      const eye = makeGlow(scene, `turret${i}eye`, "#b5e853");
+      piece(CreateBox(`turret${i}lens`, { width: 0.2, height: 0.08, depth: 0.03 }, scene), head, eye).position.set(0, 0.06, 0.22);
+      root.setEnabled(false);
+      this.turretViews.push({ id: -1, root, head, eye });
+    }
+    for (let i = 0; i < 6; i++) {
+      const mesh = CreateBox(`arc${i}`, { width: 0.14, height: 0.14, depth: 1 }, scene);
+      const mat = makeGlow(scene, `arcMat${i}`, "#bff6ff");
+      mat.alphaMode = ADD;
+      mesh.material = mat;
+      mesh.isPickable = false;
+      mesh.setEnabled(false);
+      this.arcs.push({ mesh, mat, life: 0 });
+    }
+    this.lock = CreateTorus("lock", { diameter: 1.9, thickness: 0.06, tessellation: 6 }, scene);
+    this.lock.material = makeGlow(scene, "lockMat", "#ff7a3d", 0.85);
+    this.lock.isPickable = false;
+    this.lock.setEnabled(false);
   }
 
   // ------------------------------------------------------------ primitives
@@ -470,14 +533,22 @@ export class Fx {
     else if (kind === "side") p.mesh.rotation.z = (Math.random() - 0.5) * 0.7;
   }
 
-  /** Points the effects at a new pair of fighters, when the classes change between matches. */
-  setRigs(rigs: [Rig, Rig]): void {
+  /** Points the effects at a new cast, when the fighters change between matches. */
+  setRigs(rigs: Rig[], majors: number[]): void {
     this.rigs = rigs;
-    for (let i = 0; i < 2; i++) {
-      const c = rigs[i].auraColor;
-      this.auras[i].color1 = new Color4(c.r, c.g, c.b, 0.9);
-      this.auras[i].colorDead = new Color4(c.r, c.g * 0.5, c.b * 0.5, 0);
-    }
+    this.majors = majors.slice(0, this.auras.length);
+    this.ghostTimer = rigs.map(() => 0);
+    this.steadyTimer = rigs.map(() => 0);
+    this.statusTimer = rigs.map(() => 0);
+    this.pair = [0, Math.min(1, rigs.length - 1)];
+    this.auras.forEach((ps, k) => {
+      ps.emitRate = 0;
+      const id = this.majors[k];
+      if (id === undefined) return;
+      const c = rigs[id].auraColor;
+      ps.color1 = new Color4(c.r, c.g, c.b, 0.9);
+      ps.colorDead = new Color4(c.r, c.g * 0.5, c.b * 0.5, 0);
+    });
   }
 
   /** Clears persistent marks between matches. */
@@ -492,6 +563,15 @@ export class Fx {
       c.life = 0;
       c.mesh.setEnabled(false);
     }
+    for (const t of this.turretViews) {
+      t.id = -1;
+      t.root.setEnabled(false);
+    }
+    for (const a of this.arcs) {
+      a.life = 0;
+      a.mesh.setEnabled(false);
+    }
+    this.lock.setEnabled(false);
     this.shake = 0;
   }
 
@@ -610,8 +690,8 @@ export class Fx {
       case "standoffEnd":
         if (e.trade) {
           // The two bullets met halfway.
-          rigs[0].center(this.tmp);
-          rigs[1].center(this.tmp2);
+          rigs[this.pair[0]].center(this.tmp);
+          rigs[this.pair[1]].center(this.tmp2);
           const mid = this.tmp.add(this.tmp2).scaleInPlace(0.5);
           this.star(mid, WHITE, 5, 0.2);
           this.shock(mid, FULGUR, 0.5, 6, 0.3);
@@ -662,7 +742,7 @@ export class Fx {
         this.crater(pos, 3.4);
         this.dust(pos, 22, 3.2, 10);
         this.groundRing(pos, WHITE, 1, 11, 0.42);
-        this.groundRing(pos, rigs[1 - e.id].auraColor, 0.6, 6.5, 0.3);
+        this.groundRing(pos, FULGUR, 0.6, 6.5, 0.3);
         this.star(pos.addInPlaceFromFloats(0, 0.6, 0), WHITE, 4.5, 0.16);
         this.debris(pos, { x: 0, y: 0, z: 0 }, "dirt", 8, 2);
         this.shake = Math.min(1.3, this.shake + 0.9);
@@ -758,7 +838,7 @@ export class Fx {
           this.tmp.set(e.pos.x + Math.cos(a) * e.radius * 0.6, 0.7, e.pos.z + Math.sin(a) * e.radius * 0.6);
           this.spark(this.tmp, big ? 12 : 7, color, big ? 22 : 12, 0.3, big ? 0.4 : 0.5);
         }
-        if (e.kind !== "gas") this.dust(vec(e.pos), big ? 18 : 8, 2.4, 8);
+        this.dust(vec(e.pos), big ? 18 : 8, 2.4, 8);
         this.shake = Math.min(1.3, this.shake + (big ? 0.8 : 0.3));
         break;
       }
@@ -788,6 +868,61 @@ export class Fx {
         this.shock(pos, STATUS_COLOR.hex, 0.4, 14, 0.5);
         this.spark(pos, 60, WHITE, 26, 0.36, 0.5);
         this.shake = Math.min(1.3, this.shake + 1.0);
+        break;
+      }
+      case "down": {
+        // One of the crew leaves the fight: a flash where they stood and a kick of dust.
+        const pos = vec(e.pos);
+        this.star(pos, WHITE, 3, 0.14);
+        this.shock(pos, EMBER, 0.6, 5, 0.26);
+        this.dust(pos, 8, 2, 7);
+        this.shake = Math.min(1.3, this.shake + 0.3);
+        break;
+      }
+      case "alert": {
+        // The camp has seen you.
+        const pos = vec(e.pos);
+        this.groundRing(pos, EMBER, 1, 16, 0.6);
+        this.star(pos.addInPlaceFromFloats(0, 1.6, 0), EMBER, 3.2, 0.3);
+        break;
+      }
+      case "callOut": {
+        const pos = vec(e.pos);
+        const c = rigs[e.id].auraColor;
+        this.groundRing(pos, c, 1, 14, 0.7);
+        this.groundRing(pos, WHITE, 1, 8, 0.5);
+        this.star(pos, WHITE, 5, 0.3);
+        this.shake = Math.min(1.3, this.shake + 0.4);
+        break;
+      }
+      case "turretUp": {
+        const t = this.turretViews.find((v) => v.id === -1) ?? this.turretViews[0];
+        t.id = e.id;
+        t.root.position.set(e.pos.x, 0, e.pos.z);
+        t.root.setEnabled(true);
+        t.eye.emissiveColor.copyFrom(rigs[e.owner].auraColor);
+        this.dust(vec(e.pos), 6, 1.2, 3);
+        this.groundRing(vec(e.pos), rigs[e.owner].auraColor, 0.5, 3.2, 0.3, 0.7);
+        break;
+      }
+      case "turretDown": {
+        const t = this.turretViews.find((v) => v.id === e.id);
+        if (t) {
+          t.id = -1;
+          t.root.setEnabled(false);
+        }
+        this.spark(vec(e.pos).addInPlaceFromFloats(0, 0.9, 0), 12, SAND, 8, 0.24, 0.4);
+        break;
+      }
+      case "arc": {
+        // Lightning between two bodies: a white-blue bar for an instant, and sparks where it lands.
+        const a = this.arcs[this.arcI];
+        this.arcI = (this.arcI + 1) % this.arcs.length;
+        a.life = 0.16;
+        a.mat.alpha = 1;
+        this.stretch(a.mesh, vec(e.from), vec(e.to));
+        this.spark(vec(e.to), 16, STATUS_COLOR.shock, 16, 0.26, 0.25);
+        this.shake = Math.min(1.3, this.shake + 0.2);
         break;
       }
       case "ko": {
@@ -845,16 +980,21 @@ export class Fx {
       if (c.life <= 0) c.mesh.setEnabled(false);
     }
 
-    for (let i = 0; i < 2; i++) {
-      const f = m.fighters[i];
-      const rig = this.rigs[i];
-      const hidden = f.state === "slip";
-        let rate = 0;
+    if (m.standoff) this.pair = m.standoff.ids;
+    this.majors.forEach((id, k) => {
+      const f = m.fighters[id];
+      const rig = this.rigs[id];
+      let rate = 0;
       if (f.state === "burst") rate = 260;
       else if (f.awakened > 0) rate = 55;
       else if (f.state === "steady") rate = 14;
-      this.auras[i].emitRate = hidden ? 0 : rate;
+      this.auras[k].emitRate = f.state === "slip" || !isUp(f) ? 0 : rate;
+      this.auraPos[k].set(rig.root.position.x, rig.root.position.y + 0.2, rig.root.position.z);
+    });
 
+    for (let i = 0; i < this.rigs.length; i++) {
+      const f = m.fighters[i];
+      const rig = this.rigs[i];
       // Standing still stirs the dust at your boots, and nothing else.
       if (f.state === "steady" || f.state === "standoff") {
         this.steadyTimer[i] -= dt;
@@ -863,31 +1003,59 @@ export class Fx {
           this.groundRing(rig.root.position, SAND, 0.7, 2.8, 1.0, 0.22);
         }
       } else this.steadyTimer[i] = 0;
-      this.auraPos[i].set(rig.root.position.x, rig.root.position.y + 0.2, rig.root.position.z);
 
       // Afterimages trail any fast movement.
-      const fast = f.state === "chase" || f.state === "zip" || f.state === "step" || f.state === "blasted";
+      const fast = f.state === "chase" || f.state === "zip" || f.state === "step" || f.state === "blasted" || (f.state === "ko" && !f.grounded);
       if (fast) {
         this.ghostTimer[i] -= dt;
         if (this.ghostTimer[i] <= 0) {
-          this.ghostTimer[i] = f.state === "blasted" ? 0.05 : 0.022;
-          const lean = f.state === "chase" || f.state === "zip" ? 1.1 : f.state === "blasted" ? -1.2 : 0;
-          this.ghost(rig.root.position, f.state === "blasted" ? WHITE : rig.auraColor, f.yaw, lean, f.state === "blasted" ? 0.16 : 0.24);
+          const thrown = f.state === "blasted" || f.state === "ko";
+          this.ghostTimer[i] = thrown ? 0.05 : 0.022;
+          const lean = f.state === "chase" || f.state === "zip" ? 1.1 : thrown ? -1.2 : 0;
+          this.ghost(rig.root.position, thrown ? WHITE : rig.auraColor, f.yaw, lean, thrown ? 0.16 : 0.24);
         }
       } else this.ghostTimer[i] = 0;
-    }
 
-    for (let i = 0; i < 2; i++) {
-      const f = m.fighters[i];
       this.statusTimer[i] -= dt;
-      if (this.statusTimer[i] > 0 || f.state === "slip") continue;
+      if (this.statusTimer[i] > 0 || f.state === "slip" || !isUp(f)) continue;
       this.statusTimer[i] = 0.22;
-      this.rigs[i].center(this.tmp);
+      rig.center(this.tmp);
       for (const k of STATUSES) {
         if (f.status[k] <= 0) continue;
         // Poison drifts, hex hangs, shock snaps.
         this.spark(this.tmp, k === "shock" ? 5 : 3, STATUS_COLOR[k], k === "shock" ? 14 : 4, 0.2, k === "shock" ? 0.15 : 0.6);
       }
+    }
+
+    // Sentries follow the match: where they point, and a flicker as they run down.
+    for (const t of this.turretViews) {
+      if (t.id === -1) continue;
+      const turret = m.turrets.find((x) => x.id === t.id);
+      if (!turret) {
+        t.id = -1;
+        t.root.setEnabled(false);
+        continue;
+      }
+      t.head.rotation.y = turret.yaw;
+      // A kick on each shot.
+      t.head.position.z = turret.cd > C.TURRET_GAP - 5 ? -0.06 : 0;
+      t.root.setEnabled(turret.life > 90 || Math.floor(turret.life / 6) % 2 === 0);
+    }
+    for (const a of this.arcs) {
+      if (a.life <= 0) continue;
+      a.life -= dt;
+      a.mat.alpha = Math.max(0, a.life / 0.16);
+      a.mesh.scaling.x = a.mesh.scaling.y = 0.6 + Math.random() * 1.2;
+      if (a.life <= 0) a.mesh.setEnabled(false);
+    }
+
+    // In open country, mark who the hero is facing.
+    const aim = m.opts.mode === "roam" && m.phase === "fight" && !m.standoff && !m.cine ? targetOf(m, m.fighters[0]) : null;
+    this.lock.setEnabled(!!aim);
+    if (aim) {
+      const p = this.rigs[aim.id].root.position;
+      this.lock.position.set(p.x, 0.09, p.z);
+      this.lock.rotation.y += dt * 2.4;
     }
 
     for (const z of this.zoneViews) {
@@ -919,9 +1087,9 @@ export class Fx {
   private syncProjectiles(m: Match, alpha: number): void {
     let b = 0;
     let bo = 0;
-    const usedQ = [false, false];
-    const usedU = [false, false];
-    const usedL = [false, false];
+    let q = 0;
+    let u = 0;
+    let l = 0;
     for (const p of m.projectiles) {
       const x = p.prev.x + (p.pos.x - p.prev.x) * alpha;
       const y = p.prev.y + (p.pos.y - p.prev.y) * alpha;
@@ -932,16 +1100,9 @@ export class Fx {
         mesh = this.bolts[bo];
         if (mesh) this.boltMats[bo].emissiveColor.copyFrom(this.rigs[p.owner].auraColor);
         bo++;
-      } else if (p.kind === "quick") {
-        mesh = this.quicks[p.owner];
-        usedQ[p.owner] = true;
-      } else if (p.kind === "ult") {
-        mesh = this.ults[p.owner];
-        usedU[p.owner] = true;
-      } else {
-        mesh = this.loops[p.owner];
-        usedL[p.owner] = true;
-      }
+      } else if (p.kind === "quick") mesh = this.quicks[q++];
+      else if (p.kind === "ult") mesh = this.ults[u++];
+      else mesh = this.loops[l++];
       if (!mesh) continue;
       mesh.position.set(x, y, z);
       this.tmp.set(x + p.vel.x, y + p.vel.y, z + p.vel.z);
@@ -950,11 +1111,9 @@ export class Fx {
     }
     for (let i = b; i < this.bullets.length; i++) this.bullets[i].setEnabled(false);
     for (let i = bo; i < this.bolts.length; i++) this.bolts[i].setEnabled(false);
-    for (let i = 0; i < 2; i++) {
-      if (!usedQ[i]) this.quicks[i].setEnabled(false);
-      if (!usedU[i]) this.ults[i].setEnabled(false);
-      if (!usedL[i]) this.loops[i].setEnabled(false);
-    }
+    for (let i = q; i < this.quicks.length; i++) this.quicks[i].setEnabled(false);
+    for (let i = u; i < this.ults.length; i++) this.ults[i].setEnabled(false);
+    for (let i = l; i < this.loops.length; i++) this.loops[i].setEnabled(false);
   }
 
   private stretch(mesh: Mesh, from: Vector3, to: Vector3): void {
@@ -970,19 +1129,24 @@ export class Fx {
   }
 
   private syncRopes(m: Match): void {
-    for (let i = 0; i < 2; i++) {
-      const f = m.fighters[i];
-      const o = m.fighters[1 - i];
-      const rope = this.ropes[i];
-      const lasso = m.projectiles.find((p) => p.kind === "lasso" && p.owner === i);
-      const from = this.rigs[i].hand.getAbsolutePosition();
+    this.ropes.forEach((rope, k) => {
+      const id = this.majors[k];
+      if (id === undefined) return rope.setEnabled(false);
+      const f = m.fighters[id];
+      const from = this.rigs[id].hand.getAbsolutePosition();
+      const lasso = m.projectiles.find((p) => p.kind === "lasso" && p.owner === id);
       if (lasso) {
         this.tmp.set(lasso.pos.x, lasso.pos.y, lasso.pos.z);
-        this.stretch(rope, from, this.tmp);
-      } else if (o.state === "pulled" || o.state === "tied" || f.state === "zip") {
-        this.rigs[1 - i].center(this.tmp);
-        this.stretch(rope, from, this.tmp);
-      } else rope.setEnabled(false);
-    }
+        return this.stretch(rope, from, this.tmp);
+      }
+      // The rope runs to whoever this fighter has on the end of it, while they are still close by.
+      const held = m.fighters.find(
+        (g) => g.lastHitBy === id && (g.state === "pulled" || g.state === "tied") && Math.hypot(g.pos.x - f.pos.x, g.pos.z - f.pos.z) < 14,
+      );
+      const to = held ?? (f.state === "zip" ? targetOf(m, f) : null);
+      if (!to) return rope.setEnabled(false);
+      this.rigs[to.id].center(this.tmp);
+      this.stretch(rope, from, this.tmp);
+    });
   }
 }

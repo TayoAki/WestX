@@ -1,9 +1,9 @@
 import type { KitId } from "./kits";
 import { C, MOVES } from "./moves";
-import { isFlying, isStunned, kitOf } from "./match";
+import { isFlying, isStunned, isUp, kitOf, targetOf } from "./match";
 import { makeRng, type Rng } from "./rng";
-import { blankInput, type InputFrame, type Match } from "./types";
-import { dist, distH } from "./vec";
+import { blankInput, type Fighter, type InputFrame, type Match } from "./types";
+import { dist, distH, lenH, sub, yawOf } from "./vec";
 
 // The AI plays through the same InputFrame as a person, so it obeys every rule
 // the player does. It runs a simple plan (approach, string, shoot, steady...)
@@ -53,6 +53,9 @@ const STYLE: Record<KitId, { melee: number; ranged: number; area: number; keep: 
   outlaw: { melee: 1, ranged: 1, area: 0.7, keep: 0.2 },
   witch: { melee: 0.6, ranged: 1.4, area: 2.2, keep: 0.9 },
   engineer: { melee: 0.85, ranged: 1.2, area: 1.6, keep: 0.3 },
+  // Rabble have their own, simpler mind: see Rabble below.
+  thug: { melee: 1, ranged: 0, area: 0, keep: 0 },
+  gunhand: { melee: 0.2, ranged: 1, area: 0, keep: 0.6 },
 };
 
 type Plan =
@@ -129,13 +132,12 @@ export class AI {
     const inp = blankInput();
     if (this.isDummy) return inp;
     const me = m.fighters[this.id];
-    const op = m.fighters[1 - this.id];
     const p = this.p;
     const t = m.tick;
 
     // Dead or alive: the winner takes a moment, then decides.
     if (m.phase === "verdict" && m.verdict) {
-      if (m.winner !== this.id || m.verdict.choice) return inp;
+      if (m.verdict.winner !== this.id || m.verdict.choice) return inp;
       if (this.verdictAt < 0) {
         this.verdictAt = m.verdict.t + this.rng.int(40, 100);
         this.verdictAlive = this.rng.chance(0.5);
@@ -146,23 +148,40 @@ export class AI {
       }
       return inp;
     }
-    if (m.phase !== "fight") return inp;
+    this.verdictAt = -1;
+    if (m.phase !== "fight" || !isUp(me)) return inp;
 
     // The standoff: wait for the bell, then draw after a human-sized reaction time.
     if (m.standoff) {
       const s = m.standoff;
+      const seat = s.ids.indexOf(this.id);
+      if (seat < 0) return inp;
       if (!this.wasStandoff) {
         this.wasStandoff = true;
         const flinch = this.rng.chance(p.flinch);
         this.drawAt = flinch ? this.rng.int(20, Math.max(21, s.bellAt - 4)) : s.bellAt + this.rng.int(p.draw[0], p.draw[1]);
       }
       // After a flinch, try again once the lockout has passed.
-      if (s.lock[this.id] > 0 && this.drawAt < s.lock[this.id]) this.drawAt = s.lock[this.id] + this.rng.int(4, 14);
+      if (s.lock[seat] > 0 && this.drawAt < s.lock[seat]) this.drawAt = s.lock[seat] + this.rng.int(4, 14);
       if (s.t >= this.drawAt && !me.prev.shot) inp.shot = true;
       return inp;
     }
     this.wasStandoff = false;
     if (m.cine) return inp;
+    const op = targetOf(m, me);
+    if (!op) {
+      // Nobody to fight. A gang leader waits at camp; a hero goes looking for the nearest one.
+      if (me.rank !== "hero") return inp;
+      let near: Fighter | null = null;
+      for (const g of m.fighters) {
+        if (g.team !== me.team && isUp(g) && (!near || distH(me.pos, g.pos) < distH(me.pos, near.pos))) near = g;
+      }
+      if (near) {
+        inp.yaw = yawOf(sub(near.pos, me.pos));
+        inp.my = 1;
+      }
+      return inp;
+    }
 
     // Working the cylinder: decide once per reload whether to go for the timing.
     if (me.reload > 0) {
@@ -232,7 +251,7 @@ export class AI {
     }
     // The Last Word is coming: step aside.
     for (const proj of m.projectiles) {
-      if (proj.owner === this.id || proj.kind !== "ult") continue;
+      if (m.fighters[proj.owner].team === me.team || proj.kind !== "ult") continue;
       if (dist(proj.pos, me.pos) < 16 && me.state === "free" && me.dashes > 0 && this.rng.chance(p.guard * 0.3)) {
         inp.dash = !me.prev.dash;
         inp.mx = this.side;
@@ -252,7 +271,7 @@ export class AI {
 
     const kit = kitOf(me);
     // Being shot at from range: the hunter raises the brace and walks in.
-    const underFire = m.projectiles.some((pr) => pr.owner !== this.id && (pr.kind === "bullet" || pr.kind === "quick"));
+    const underFire = m.projectiles.some((pr) => m.fighters[pr.owner].team !== me.team && (pr.kind === "bullet" || pr.kind === "quick"));
     if (kit.deflect && underFire && dh > 5 && me.state === "free" && this.plan !== "advance") {
       if (!this.shotRolled) {
         this.shotRolled = true;
@@ -279,7 +298,7 @@ export class AI {
     if (me.state !== "free" && me.state !== "attack" && me.state !== "steady" && me.state !== "guard" && me.state !== "blockstun") return inp;
 
     this.pt++;
-    if (this.plan === "idle" && this.pt >= this.pdur) this.choose(m, dh, dy);
+    if (this.plan === "idle" && this.pt >= this.pdur) this.choose(m, op, dh, dy);
 
     switch (this.plan) {
       case "approach": {
@@ -419,9 +438,8 @@ export class AI {
     return inp;
   }
 
-  private choose(m: Match, dh: number, dy: number): void {
+  private choose(m: Match, op: Fighter, dh: number, dy: number): void {
     const me = m.fighters[this.id];
-    const op = m.fighters[1 - this.id];
     const p = this.p;
     const r = this.rng;
 
@@ -436,7 +454,8 @@ export class AI {
     const loaded = !hasGun || (me.reload === 0 && me.ammo > 0);
     // The held shot: a fanned cylinder, or a hex circle that costs Nerve.
     const canHold = kit.hold === "circle" ? me.meter >= C.CIRCLE_COST : me.reload === 0 && me.ammo >= 3;
-    const canSpecial = me.meter >= C.LARIAT_COST;
+    // One sentry at a time: there is no sense paying for a second while the first is running.
+    const canSpecial = me.meter >= C.LARIAT_COST && !(kit.special === "sentry" && m.turrets.some((t) => t.owner === me.id));
     const wantsSteady = me.grounded && (me.meter < 70 || (hasGun && me.ammo < 3));
     if (kit.deflect && dh > 7 && op.ammo > 0) options.push(["advance", 2.2, r.int(90, 160)]);
     if (dh > 18) {
@@ -468,5 +487,63 @@ export class AI {
       if (roll <= 0) return this.setPlan(o[0], o[2]);
     }
     this.setPlan("circle", 30);
+  }
+}
+
+/**
+ * One of a leader's crew. No plans to speak of: circle the hero at a distance,
+ * and when the rules hand over a turn, step in and swing, or stop and shoot.
+ * With nobody to fight, walk back to camp.
+ */
+export class Rabble {
+  private rng: Rng;
+  private side: number;
+  /** How far out this one likes to circle while it waits. */
+  private ring: number;
+
+  constructor(
+    private id: number,
+    seed: number,
+  ) {
+    this.rng = makeRng(seed);
+    this.side = this.rng.chance(0.5) ? 1 : -1;
+    this.ring = this.rng.range(5, 8);
+  }
+
+  think(m: Match): InputFrame {
+    const inp = blankInput();
+    const me = m.fighters[this.id];
+    if (m.phase !== "fight" || m.standoff || m.cine || !isUp(me)) return inp;
+    const op = targetOf(m, me);
+    if (!op) {
+      const back = sub(me.home, me.pos);
+      if (lenH(back) > 1.5) {
+        inp.yaw = yawOf(back);
+        inp.my = 0.6;
+      }
+      return inp;
+    }
+    if (me.state !== "free" && me.state !== "attack") return inp;
+    if (this.rng.chance(0.004)) this.side = -this.side;
+    const dh = distH(me.pos, op.pos);
+    const gun = kitOf(me).gun !== "none";
+
+    if (me.turn > 0) {
+      if (gun) {
+        // Find a range, stop, and shoot.
+        inp.my = dh > 16 ? 1 : dh < 8 ? -0.8 : 0;
+        inp.mx = this.side * 0.3;
+        if (dh <= 19 && me.turn % 40 === 20 && me.ammo > 0 && me.reload === 0) inp.shot = true;
+      } else if (dh > 2.1) {
+        inp.my = 1;
+        inp.mx = this.side * 0.15;
+      } else if (!me.prev.strike && (me.state === "free" || me.moveHit)) inp.strike = true;
+      return inp;
+    }
+    // Waiting for a turn: keep a ring around the hero, and keep moving.
+    const want = gun ? 13 : this.ring;
+    inp.mx = this.side * 0.55;
+    inp.my = dh > want + 1 ? 0.9 : dh < want - 1 ? -0.7 : 0;
+    return inp;
   }
 }

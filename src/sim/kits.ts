@@ -4,12 +4,13 @@ import type { MoveId } from "./types";
 // how much they can dash, how long their strings run, what their buttons do.
 //
 // The three playable classes are built to need each other:
-//   - The witch owns space. Her attacks are areas, not aims.
-//   - The engineer owns conditions. Poison wears you down; shock stops you.
+//   - The witch owns the ground, from far away. Her attacks are areas, not aims.
+//   - The engineer builds machines and fights close. A sentry that shoots on its own,
+//     lightning that jumps from body to body, poison to wear you down and shock to stop you.
 //   - The lawman is the balance: solid at every range, hard to move, no gimmicks.
 // The outlaw is a rival-only kit: quick, slippery and light.
 
-export type KitId = "hunter" | "witch" | "engineer" | "outlaw";
+export type KitId = "hunter" | "witch" | "engineer" | "outlaw" | "thug" | "gunhand";
 
 export interface Kit {
   id: KitId;
@@ -58,10 +59,12 @@ export interface Kit {
   gun: "revolver" | "rivet" | "none";
   /** Holding the shot button: empty the cylinder, or lay a hex circle under the target. */
   hold: "fan" | "circle";
-  /** Shot from holding steady: one hard bullet, a storm over the target, or a bolt that shocks. */
+  /** Shot from holding steady: one hard bullet, a storm over the target, or lightning that jumps between bodies. */
   quick: "quickdraw" | "storm" | "tesla";
-  /** The special button: rope them in, hang them in the air, or gas the ground they stand on. */
-  special: "lariat" | "knot" | "canister";
+  /** The special button: rope them in, hang them in the air, or set a sentry down. */
+  special: "lariat" | "knot" | "sentry";
+  /** A multiplier on everything this fighter deals. Rabble hit softer. */
+  power: number;
 }
 
 export const KITS: Record<KitId, Kit> = {
@@ -92,6 +95,7 @@ export const KITS: Record<KitId, Kit> = {
     hold: "fan",
     quick: "quickdraw",
     special: "lariat",
+    power: 1,
   },
   witch: {
     id: "witch",
@@ -121,6 +125,7 @@ export const KITS: Record<KitId, Kit> = {
     hold: "circle",
     quick: "storm",
     special: "knot",
+    power: 1,
   },
   engineer: {
     id: "engineer",
@@ -148,7 +153,8 @@ export const KITS: Record<KitId, Kit> = {
     gun: "rivet",
     hold: "fan",
     quick: "tesla",
-    special: "canister",
+    special: "sentry",
+    power: 1,
   },
   outlaw: {
     id: "outlaw",
@@ -177,5 +183,65 @@ export const KITS: Record<KitId, Kit> = {
     hold: "fan",
     quick: "quickdraw",
     special: "lariat",
+    power: 1,
+  },
+  // Rabble. A leader's crew: no dashes, no escapes, no tricks. They come in numbers.
+  thug: {
+    id: "thug",
+    hp: 170,
+    run: 6.2,
+    airRun: 5,
+    jumpV: 11,
+    airJumps: 0,
+    fall: 1,
+    dashes: 0,
+    dashRegen: 9999,
+    chaseSpeed: 0,
+    chaseFrames: 0,
+    tackle: false,
+    string: ["g1", "g2"],
+    enders: { blast: "g2", launch: "g2", slam: "g2" },
+    maxChases: 0,
+    maxLaunches: 0,
+    guardWalk: 0,
+    deflect: false,
+    thunderclap: false,
+    breaker: "slip",
+    catchShock: false,
+    pips: 0,
+    gun: "none",
+    hold: "fan",
+    quick: "quickdraw",
+    special: "lariat",
+    power: 1,
+  },
+  gunhand: {
+    id: "gunhand",
+    hp: 130,
+    run: 6.6,
+    airRun: 5,
+    jumpV: 11,
+    airJumps: 0,
+    fall: 1,
+    dashes: 0,
+    dashRegen: 9999,
+    chaseSpeed: 0,
+    chaseFrames: 0,
+    tackle: false,
+    string: ["g1"],
+    enders: { blast: "g1", launch: "g1", slam: "g1" },
+    maxChases: 0,
+    maxLaunches: 0,
+    guardWalk: 0,
+    deflect: false,
+    thunderclap: false,
+    breaker: "slip",
+    catchShock: false,
+    pips: 0,
+    gun: "revolver",
+    hold: "fan",
+    quick: "quickdraw",
+    special: "lariat",
+    power: 0.75,
   },
 };

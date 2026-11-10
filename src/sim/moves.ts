@@ -313,13 +313,35 @@ export const MOVES: Record<MoveId, MoveDef> = {
     cancelHit: 17,
     cancelWhiff: NEVER,
   },
-  canister: {
-    id: "canister",
-    total: 34,
+  sentry: {
+    id: "sentry",
+    total: 30,
     hits: [],
-    fireAt: 10,
+    fireAt: 12,
     cancelHit: NEVER,
     cancelWhiff: NEVER,
+  },
+  // Rabble swing slowly, so a crowd of them can be read and answered.
+  g1: {
+    id: "g1",
+    total: 34,
+    lunge: { from: 8, to: 14, speed: 18 },
+    hits: [
+      { from: 15, to: 18, range: 2.3, damage: 22, effect: "reel", stun: 12, blockstun: 10, guardDamage: 6, hitstop: 3, strength: 1, meter: 0 },
+    ],
+    cancelHit: 22,
+    cancelWhiff: 9999,
+    next: "g2",
+  },
+  g2: {
+    id: "g2",
+    total: 38,
+    lunge: { from: 6, to: 12, speed: 16 },
+    hits: [
+      { from: 14, to: 17, range: 2.4, damage: 30, effect: "reel", stun: 16, blockstun: 12, guardDamage: 9, hitstop: 4, strength: 2, meter: 0 },
+    ],
+    cancelHit: 9999,
+    cancelWhiff: 9999,
   },
   /** Out of the holster and fired in one motion. */
   quickdraw: {
@@ -379,11 +401,17 @@ export const dryEnder = (hb: HitBox): HitBox => ({
 /** The hunter's dash is a shoulder charge. This is what it does to whoever it reaches. */
 export const TACKLE: HitBox = { from: 0, to: 0, range: 0, damage: 40, effect: "stagger", stun: 28, blockstun: 16, guardDamage: 30, hitstop: 9, strength: 2, meter: 6 };
 
+/** The Last Word does not stop for rabble. This is what it does to each one on its way through. */
+export const ULT_GRAZE: HitBox = { from: 0, to: 0, range: 0, damage: 260, effect: "blast", stun: 0, blockstun: 20, guardDamage: 60, hitstop: 4, strength: 3, meter: 0 };
+
 /** Hit data for projectiles, in the same shape as strike hitboxes. Damage is set per shot. */
 export const PROJ_HITS: Record<"bullet" | "quick", HitBox> = {
   bullet: { from: 0, to: 0, range: 0, damage: 14, effect: "reel", stun: 9, blockstun: 5, guardDamage: 4, hitstop: 1, strength: 1, meter: 4 },
   quick: { from: 0, to: 0, range: 0, damage: 70, effect: "blast", stun: 0, blockstun: 20, guardDamage: 50, hitstop: 9, strength: 3, meter: 12 },
 };
+
+/** Tesla jumping to the next body. Damage is a share of the shot that started it. */
+export const CHAIN_HIT: HitBox = { from: 0, to: 0, range: 0, damage: 0, effect: "stagger", stun: 24, blockstun: 12, guardDamage: 20, hitstop: 3, strength: 2, meter: 4, status: "shock" };
 
 /** A homing hex bolt, the witch's basic shot. */
 export const BOLT_HIT: HitBox = { from: 0, to: 0, range: 0, damage: 42, effect: "reel", stun: 16, blockstun: 8, guardDamage: 8, hitstop: 3, strength: 1, meter: 5 };
@@ -407,8 +435,6 @@ export const ZONES: Record<ZoneKind, ZoneDef> = {
   hex: { radius: 4.2, fuse: 34, life: 150, burst: 80, effect: "stagger", stun: 40, every: 30, tick: 12, status: "hex" },
   // Her storm: a bigger area, one hard strike, nothing left behind. Its damage scales with how long she chanted.
   storm: { radius: 6, fuse: 20, life: 14, burst: 125, effect: "blast", stun: 0, every: 0, tick: 0, status: "hex" },
-  // The engineer's gas: little at first, then it sits there and poisons the ground.
-  gas: { radius: 4.5, fuse: 20, life: 210, burst: 20, effect: "reel", stun: 14, every: 20, tick: 4, status: "poison" },
 };
 
 /** Tunable constants. Distances in metres, speeds in metres per second, times in frames. */
@@ -416,7 +442,57 @@ export const C = {
   DT: 1 / 60,
   GRAVITY: 34,
   DJUMP_V: 13.5,
+  /** The arena, for a duel. */
   ARENA_R: 75,
+  /** The open field, for the overworld. */
+  FIELD_R: 110,
+  /** The hero locks onto enemies inside this range, and lets go of one that gets further than the second. */
+  LOCK_R: 26,
+  UNLOCK_R: 40,
+  /** A gang notices a hero who comes this close. */
+  ALERT_R: 20,
+  /** At most this many rabble attack one hero at a time. The rest circle. */
+  RABBLE_TURNS: 2,
+  RABBLE_TURN_T: 150,
+  /** Turns are handed out at least this far apart, so a crew comes in waves and not all at once. */
+  RABBLE_TURN_GAP: 50,
+  /** With nobody after them the hero gets their wind back: this share of their health each tick. */
+  REST_REGEN: 0.0008,
+  /** An overload also burns anyone standing this close to it. */
+  OVERLOAD_R: 4.5,
+  OVERLOAD_SPLASH: 0.6,
+  /** With nobody to face, moves aim at a point this far ahead. */
+  AIM_AHEAD: 12,
+  /** How far from the middle of the field the gangs camp. */
+  CAMP_R: 48,
+  /** A gang leader in open country has this share of a duellist's health: these are quicker fights than the arena's. */
+  LEADER_HP: 0.6,
+  /** A crew gives up the chase when the hero is this far from their camp. */
+  LEASH_R: 58,
+  /** Rabble only get a turn to attack from inside this range. */
+  TURN_R: 18,
+  /** A leader calling the hero out strides in to this distance, at this speed. */
+  CALLOUT_GAP: 12,
+  CALLOUT_SPEED: 40,
+  CALLOUT_WAIT: 120,
+  /**
+   * Crowd fights. Rabble fly further the more they have been hurt (1 + SMASH at no health),
+   * and under SMASH_TUMBLE of their health any solid hit takes them off their feet.
+   */
+  SMASH: 1.2,
+  SMASH_TUMBLE: 0.5,
+  /** A blast throws rabble this share of the way it throws a duellist, before SMASH. */
+  RABBLE_BLAST: 0.3,
+  /** The hit that finishes one of the rabble throws them out of the fight at this speed. */
+  RABBLE_KO_V: 30,
+  /** Hits on or by rabble freeze the fight for no longer than this. */
+  RABBLE_HITSTOP: 3,
+  /** A body flying faster than this bowls over its own side's rabble. */
+  BOWL_SPEED: 12,
+  BOWL_DMG: 15,
+  BOWL_POWER: 0.18,
+  /** The shoulder charge also hits anyone this close to where it lands. */
+  TACKLE_R: 2.6,
   BODY_R: 0.55,
 
   METER: 100,
@@ -472,7 +548,7 @@ export const C = {
   /** Two different conditions on one fighter burn off together. */
   OVERLOAD_DMG: 100,
 
-  // The witch's bolts and circles, and the engineer's rivets and gas.
+  // The witch's bolts and circles, and the engineer's rivets, tesla and sentry.
   BOLT_SPEED: 32,
   BOLT_LIFE: 170,
   BOLT_TURN: 0.06,
@@ -481,6 +557,18 @@ export const C = {
   RIVET_DMG: 8,
   TESLA_DMG_MIN: 40,
   TESLA_DMG_MAX: 75,
+  /** Tesla jumps to this many more bodies, each within this reach of the last, for this share of its damage. */
+  CHAIN_JUMPS: 3,
+  CHAIN_R: 7,
+  CHAIN_DMG: 0.5,
+  /** The sentry: how long it runs, how often and how far it shoots, and what a rivet from it does. */
+  TURRET_LIFE: 480,
+  TURRET_GAP: 26,
+  TURRET_R: 22,
+  TURRET_DMG: 5,
+  /** Where it is set down, ahead of the engineer, and how high its barrel sits. */
+  TURRET_AHEAD: 2.2,
+  TURRET_H: 1,
   KNOT_STUN: 70,
 
   // Holding steady.

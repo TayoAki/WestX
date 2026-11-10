@@ -1,5 +1,5 @@
 import { KITS, type Kit, type KitId } from "./kits";
-import { BOLT_HIT, C, dryEnder, MOVES, PROJ_HITS, TACKLE, ZONES, type HitBox } from "./moves";
+import { BOLT_HIT, C, CHAIN_HIT, dryEnder, MOVES, PROJ_HITS, TACKLE, ULT_GRAZE, ZONES, type HitBox } from "./moves";
 import { makeRng } from "./rng";
 import {
   BUTTONS,
@@ -15,10 +15,12 @@ import {
   type ProjKind,
   type Prop,
   type PropKind,
+  type Rank,
   type ShotKind,
   type SimEvent,
   STATUSES,
   type StatusId,
+  type Turret,
   type Zone,
   type ZoneKind,
 } from "./types";
@@ -44,8 +46,12 @@ import {
   type V3,
 } from "./vec";
 
-// The whole duel as a pure step function: state + two inputs -> next state + events.
+// The whole fight as a pure step function: state + one input per fighter -> next state + events.
 // Nothing here touches the browser, so the same code runs in tests and can run on a server.
+//
+// There are two kinds of fight. A duel is the arena: two fighters and one formal finish.
+// The overworld is open country: one hero, gangs camped about, and a fight wherever they meet.
+// A gang's crew is rabble, fought as a crowd. Its leader is a duel, called out on the spot.
 
 const STUNNED: ReadonlySet<FState> = new Set<FState>([
   "hitstun",
@@ -88,8 +94,37 @@ export const isFlying = (f: Fighter): boolean => FLYING.has(f.state);
 const canBeHit = (f: Fighter): boolean => f.invuln <= 0 && !UNHITTABLE.has(f.state);
 export const centerOf = (f: Fighter): V3 => v3(f.pos.x, f.pos.y + 0.95, f.pos.z);
 export const kitOf = (f: Fighter): Kit => KITS[f.kit];
+/** Still in the fight: on their feet, or able to get back to them. */
+export const isUp = (f: Fighter): boolean => f.hp > 0 && f.state !== "ko" && f.state !== "downed" && f.state !== "tied";
+/** The fighter this one is facing, or null when there is nobody. */
+export const targetOf = (m: Match, f: Fighter): Fighter | null => (f.target >= 0 ? m.fighters[f.target] : null);
 
-function createFighter(id: number, name: string, kit: KitId, pos: V3, yaw: number): Fighter {
+/**
+ * A stand-in for nobody: a point a few strides ahead of a fighter with no target,
+ * so every move still has somewhere to aim. It cannot be hit and belongs to no side.
+ */
+function ahead(f: Fighter): Fighter {
+  const d = dirOfYaw(f.yaw);
+  return {
+    ...f,
+    id: -1,
+    team: -1,
+    pos: v3(f.pos.x + d.x * C.AIM_AHEAD, f.pos.y, f.pos.z + d.z * C.AIM_AHEAD),
+    vel: v3(),
+    state: "free",
+    move: null,
+    invuln: 1 << 20,
+    awakened: 0,
+    status: { poison: 0, shock: 0, hex: 0 },
+    combo: { hits: 0, damage: 0, chases: 0, launches: 0 },
+  };
+}
+
+const foe = (m: Match, f: Fighter): Fighter => targetOf(m, f) ?? ahead(f);
+/** Whoever hit this fighter last. Escapes, and the blame for what follows a hit, go to them. */
+const blameOf = (m: Match, f: Fighter): Fighter | null => (f.lastHitBy >= 0 ? m.fighters[f.lastHitBy] : targetOf(m, f));
+
+function createFighter(id: number, name: string, kit: KitId, pos: V3, yaw: number, rank: Rank, team: number, gang = -1): Fighter {
   const buf = {} as Record<Button, number>;
   for (const b of BUTTONS) buf[b] = 0;
   const k = KITS[kit];
@@ -97,6 +132,16 @@ function createFighter(id: number, name: string, kit: KitId, pos: V3, yaw: numbe
     id,
     name,
     kit,
+    rank,
+    team,
+    gang,
+    // A gang stands at its camp until trouble comes to it.
+    awake: gang < 0,
+    home: clone(pos),
+    target: -1,
+    lastHitBy: -1,
+    turn: 0,
+    waited: 0,
     maxHp: k.hp,
     pos,
     vel: v3(),
@@ -130,7 +175,7 @@ function createFighter(id: number, name: string, kit: KitId, pos: V3, yaw: numbe
     dur: 0,
     move: null,
     mf: 0,
-    hitDone: [],
+    hitIds: [],
     moveHit: false,
     zipFlag: false,
     airHang: false,
@@ -157,48 +202,107 @@ const PROP_SPECS: Record<PropKind, { radius: number; height: number; hp: number 
 function createProps(m: Match): Prop[] {
   const props: Prop[] = [];
   const kinds: PropKind[] = ["crate", "barrel", "cactus", "rock", "crate", "barrel", "cactus"];
+  const roam = m.opts.mode === "roam";
+  const want = roam ? 70 : 30;
+  const tries = roam ? 2400 : 600;
+  const far = roam ? m.radius - 8 : 62;
   let guard = 0;
-  while (props.length < 30 && guard++ < 600) {
+  while (props.length < want && guard++ < tries) {
     const kind = kinds[m.rng.int(0, kinds.length - 1)];
     const spec = PROP_SPECS[kind];
-    const r = m.rng.range(9, 62);
+    const r = m.rng.range(9, far);
     const a = m.rng.range(0, Math.PI * 2);
     const pos = v3(Math.cos(a) * r, 0, Math.sin(a) * r);
     // Keep the opening sightline between the two fighters clear.
-    if (Math.abs(pos.x) < 4 && Math.abs(pos.z) < 14) continue;
+    if (!roam && Math.abs(pos.x) < 4 && Math.abs(pos.z) < 14) continue;
+    // A camp stays clear, so a gang has room to fight.
+    if (roam && m.fighters.some((f) => f.rank === "named" && distH(f.home, pos) < 12)) continue;
     if (props.some((p) => distH(p.pos, pos) < p.radius + spec.radius + 2.5)) continue;
     props.push({ kind, pos, radius: spec.radius, height: spec.height, hp: spec.hp, broken: false });
   }
   return props;
 }
 
+const LEADER_NAMES: Record<KitId, string> = {
+  outlaw: "Red Marrow",
+  witch: "Widow Sable",
+  engineer: "Tinker Voss",
+  hunter: "Marshal Pike",
+  thug: "Thug",
+  gunhand: "Gunhand",
+};
+
+/** The overworld: the hero in the middle of open country, and gangs camped around them. */
+function populate(m: Match): void {
+  const heroKit = m.opts.kits[0];
+  const hero = createFighter(0, "Hero", heroKit, v3(), 0, "hero", 0);
+  m.fighters.push(hero);
+  // Each gang is led by a class the hero is not, starting with the outlaw.
+  const leaders = (["outlaw", "witch", "engineer", "hunter"] as KitId[]).filter((k) => k !== heroKit);
+  const turn = m.rng.range(0, Math.PI * 2);
+  for (let g = 0; g < m.opts.gangs; g++) {
+    const a = turn + (g * Math.PI * 2) / m.opts.gangs;
+    const home = v3(Math.sin(a) * C.CAMP_R, 0, Math.cos(a) * C.CAMP_R);
+    const inward = normH(scale(home, -1), v3(0, 0, 1));
+    const side = rightOf(inward);
+    const face = yawOf(inward);
+    const kit = leaders[g % leaders.length];
+    const boss = createFighter(m.fighters.length, LEADER_NAMES[kit], kit, home, face, "named", 1, g);
+    boss.maxHp = Math.round(boss.maxHp * C.LEADER_HP);
+    boss.hp = boss.maxHp;
+    m.fighters.push(boss);
+    // The crew stand in a loose line between their leader and whoever is coming.
+    const crew = 4 + (g % 3);
+    for (let i = 0; i < crew; i++) {
+      const spread = (i - (crew - 1) / 2) * 2.4;
+      const depth = 4.5 + (i % 2) * 2.2;
+      const pos = v3(home.x + inward.x * depth + side.x * spread, 0, home.z + inward.z * depth + side.z * spread);
+      const crewKit: KitId = i % 3 === 2 ? "gunhand" : "thug";
+      m.fighters.push(createFighter(m.fighters.length, LEADER_NAMES[crewKit], crewKit, pos, face, "rabble", 1, g));
+    }
+  }
+}
+
 export function createMatch(seed: number, opts: Partial<MatchOptions> = {}): Match {
   // By default the player is the heavy hunter and the rival is the quick outlaw.
   const kits: [KitId, KitId] = opts.kits ?? ["hunter", "outlaw"];
+  const mode = opts.mode ?? "duel";
   const m: Match = {
     tick: 0,
     phase: "intro",
     phaseT: 0,
-    fighters: [
-      createFighter(0, "Hunter", kits[0], v3(0, 0, -6), 0),
-      createFighter(1, "Rival", kits[1], v3(0, 0, 6), Math.PI),
-    ],
+    fighters: [],
+    radius: mode === "roam" ? C.FIELD_R : C.ARENA_R,
     projectiles: [],
     nextProjId: 1,
     props: [],
     zones: [],
     nextZoneId: 1,
+    turrets: [],
+    nextTurretId: 1,
     hitstop: 0,
     cine: null,
     standoff: null,
+    callout: -1,
+    calloutT: 0,
     standoffCd: 0,
     verdict: null,
     winner: -1,
+    loser: -1,
+    bounty: 0,
     outcome: null,
     rng: makeRng(seed),
     events: [],
-    opts: { training: false, opening: true, ...opts, kits },
+    opts: { training: false, opening: true, ...opts, kits, mode, gangs: opts.gangs ?? 3 },
   };
+  if (mode === "roam") populate(m);
+  else {
+    const a = createFighter(0, "Hunter", kits[0], v3(0, 0, -6), 0, "hero", 0);
+    const b = createFighter(1, "Rival", kits[1], v3(0, 0, 6), Math.PI, "named", 1);
+    a.target = 1;
+    b.target = 0;
+    m.fighters.push(a, b);
+  }
   m.props = createProps(m);
   return m;
 }
@@ -223,6 +327,20 @@ function stopH(f: Fighter): void {
 
 const toTarget = (f: Fighter, o: Fighter): V3 => normH(sub(o.pos, f.pos), dirOfYaw(f.yaw));
 
+/** Where the stick points on the ground: around the target, or as the camera sees it when there is none. */
+function steer(f: Fighter, o: Fighter, inp: InputFrame): V3 {
+  let mx = inp.mx;
+  let my = inp.my;
+  const l = Math.hypot(mx, my);
+  if (l > 1) {
+    mx /= l;
+    my /= l;
+  }
+  const fwd = o.id < 0 ? dirOfYaw(inp.yaw) : toTarget(f, o);
+  const right = rightOf(fwd);
+  return v3(fwd.x * my + right.x * mx, 0, fwd.z * my + right.z * mx);
+}
+
 function consume(f: Fighter, b: Button): boolean {
   if (f.buf[b] > 0) {
     f.buf[b] = 0;
@@ -235,7 +353,7 @@ function startMove(f: Fighter, o: Fighter, id: MoveId): void {
   setState(f, "attack");
   f.move = id;
   f.mf = 0;
-  f.hitDone = [];
+  f.hitIds = [];
   f.moveHit = false;
   f.enderLive = false;
   f.yaw = yawOf(toTarget(f, o));
@@ -293,14 +411,25 @@ function applyStatus(m: Match, f: Fighter, kind: StatusId): void {
 
 /** Two conditions burn off together in one burst. This is what the classes set up for each other. */
 function overload(m: Match, f: Fighter): void {
-  const o = m.fighters[1 - f.id];
+  const o = blameOf(m, f);
   for (const k of STATUSES) f.status[k] = 0;
   dealDamage(m, o, f, C.OVERLOAD_DMG);
-  o.combo.hits++;
+  if (o) o.combo.hits++;
   f.hitsTaken++;
-  m.hitstop = Math.max(m.hitstop, 12);
+  m.hitstop = Math.max(m.hitstop, f.rank === "rabble" ? C.RABBLE_HITSTOP : 12);
   m.events.push({ type: "overload", id: f.id, pos: centerOf(f) });
-  const dir = toTarget(o, f);
+  const dir = o ? toTarget(o, f) : dirOfYaw(f.yaw + Math.PI);
+  // In a crowd the burst catches whoever is standing close.
+  for (const g of m.fighters) {
+    if (g === f || g.team !== f.team || !isUp(g) || !canBeHit(g) || distH(g.pos, f.pos) > C.OVERLOAD_R) continue;
+    const away = normH(sub(g.pos, f.pos), dir);
+    g.lastHitBy = f.lastHitBy;
+    g.hitsTaken++;
+    if (o) o.combo.hits++;
+    dealDamage(m, o, g, C.OVERLOAD_DMG * C.OVERLOAD_SPLASH);
+    if (g.hp <= 0) defeat(m, g, away);
+    else if (!isFlying(g)) setBlasted(g, away, g.rank === "rabble" ? C.RABBLE_BLAST : 0.5);
+  }
   if (f.hp <= 0) return defeat(m, f, dir);
   if (canBeHit(f) && !isFlying(f)) setBlasted(f, dir, 0.5);
 }
@@ -310,9 +439,9 @@ function spawnZone(m: Match, f: Fighter, kind: ZoneKind, at: V3, power = 1): voi
   const d = ZONES[kind];
   const pos = v3(at.x, 0, at.z);
   const r = lenH(pos);
-  if (r > C.ARENA_R - 1) {
-    pos.x *= (C.ARENA_R - 1) / r;
-    pos.z *= (C.ARENA_R - 1) / r;
+  if (r > m.radius - 1) {
+    pos.x *= (m.radius - 1) / r;
+    pos.z *= (m.radius - 1) / r;
   }
   const z: Zone = { id: m.nextZoneId++, kind, owner: f.id, pos, radius: d.radius, fuse: d.fuse, life: d.life, burst: d.burst * power, every: d.every, tick: d.tick, status: d.status };
   m.zones.push(z);
@@ -330,25 +459,30 @@ function updateZones(m: Match): void {
   for (const z of m.zones) {
     if (m.phase !== "fight") return;
     const att = m.fighters[z.owner];
-    const def = m.fighters[1 - z.owner];
-    const away = normH(sub(def.pos, z.pos), toTarget(att, def));
     if (z.fuse > 0) {
       z.fuse--;
       if (z.fuse > 0) continue;
       m.events.push({ type: "zoneErupt", id: z.id, kind: z.kind, pos: clone(z.pos), radius: z.radius });
-      if (inZone(z, def)) {
-        const d = ZONES[z.kind];
-        const hb: HitBox = { from: 0, to: 0, range: 0, damage: z.burst, effect: d.effect, stun: d.stun, blockstun: 16, guardDamage: 30, hitstop: z.kind === "storm" ? 10 : 5, strength: z.kind === "gas" ? 2 : 3, meter: 6, status: z.status ?? undefined };
-        applyHit(m, att, def, hb, away, true);
+      const d = ZONES[z.kind];
+      const hb: HitBox = { from: 0, to: 0, range: 0, damage: z.burst, effect: d.effect, stun: d.stun, blockstun: 16, guardDamage: 30, hitstop: z.kind === "storm" ? 10 : 5, strength: 3, meter: 6, status: z.status ?? undefined };
+      for (const def of m.fighters) {
+        if (def.team === att.team || !inZone(z, def)) continue;
+        applyHit(m, att, def, hb, normH(sub(def.pos, z.pos), toTarget(att, def)), true);
+        if (m.phase !== "fight") return;
       }
       continue;
     }
     z.life--;
-    if (z.every > 0 && z.life > 0 && z.life % z.every === 0 && inZone(z, def) && def.hp > 0) {
+    if (z.every <= 0 || z.life <= 0 || z.life % z.every !== 0) continue;
+    for (const def of m.fighters) {
+      if (def.team === att.team || def.hp <= 0 || !inZone(z, def)) continue;
       // A lingering area ignores a guard. You cannot block the ground you are standing on.
+      def.lastHitBy = att.id;
+      rouse(m, def);
       dealDamage(m, att, def, z.tick * (def.status.hex > 0 ? C.HEX_DMG : 1));
       if (z.status) applyStatus(m, def, z.status);
-      if (def.hp <= 0 && m.phase === "fight") return defeat(m, def, away);
+      if (def.hp <= 0) defeat(m, def, normH(sub(def.pos, z.pos), toTarget(att, def)));
+      if (m.phase !== "fight") return;
     }
   }
   if (m.phase !== "fight") return;
@@ -356,6 +490,76 @@ function updateZones(m: Match): void {
   if (spent.length === 0) return;
   for (const z of spent) m.events.push({ type: "zoneEnd", id: z.id });
   m.zones = m.zones.filter((z) => z.fuse > 0 || z.life > 0);
+}
+
+// ---------------------------------------------------------------- machines
+
+/** The engineer sets a sentry down a stride ahead. One at a time: a new one replaces the old. */
+function setSentry(m: Match, f: Fighter): void {
+  for (const t of m.turrets) if (t.owner === f.id) m.events.push({ type: "turretDown", id: t.id, pos: clone(t.pos) });
+  m.turrets = m.turrets.filter((t) => t.owner !== f.id);
+  const d = dirOfYaw(f.yaw);
+  const pos = v3(f.pos.x + d.x * C.TURRET_AHEAD, 0, f.pos.z + d.z * C.TURRET_AHEAD);
+  const r = lenH(pos);
+  if (r > m.radius - 1) {
+    pos.x *= (m.radius - 1) / r;
+    pos.z *= (m.radius - 1) / r;
+  }
+  const t: Turret = { id: m.nextTurretId++, owner: f.id, pos, yaw: f.yaw, life: C.TURRET_LIFE, cd: C.TURRET_GAP };
+  m.turrets.push(t);
+  m.events.push({ type: "turretUp", id: t.id, owner: f.id, pos: clone(pos) });
+}
+
+function clearTurrets(m: Match): void {
+  for (const t of m.turrets) m.events.push({ type: "turretDown", id: t.id, pos: clone(t.pos) });
+  m.turrets = [];
+}
+
+/** A sentry picks its own target, the nearest enemy in range, and fires poisoned rivets at it. */
+function updateTurrets(m: Match): void {
+  for (const t of m.turrets) {
+    t.life--;
+    if (t.cd > 0) t.cd--;
+    if (t.life <= 0 || t.cd > 0) continue;
+    const owner = m.fighters[t.owner];
+    let aim: Fighter | null = null;
+    for (const g of m.fighters) {
+      if (g.team === owner.team || !isUp(g) || !canBeHit(g)) continue;
+      const d = distH(g.pos, t.pos);
+      if (d <= C.TURRET_R && (!aim || d < distH(aim.pos, t.pos))) aim = g;
+    }
+    if (!aim) continue;
+    const from = v3(t.pos.x, C.TURRET_H, t.pos.z);
+    const dir = norm(sub(centerOf(aim), from), dirOfYaw(t.yaw));
+    t.yaw = yawOf(normH(dir, dirOfYaw(t.yaw)));
+    t.cd = C.TURRET_GAP;
+    const pos = add(from, scale(dir, 0.6));
+    // Its rivets are the engineer's own: their hits, their combo, their blame.
+    m.projectiles.push({ id: m.nextProjId++, kind: "bullet", owner: owner.id, pos, prev: clone(pos), vel: scale(dir, C.BULLET_SPEED), life: C.BULLET_LIFE, radius: 0.3, damage: C.TURRET_DMG, status: "poison", homing: 0, target: aim.id, hit: [] });
+    m.events.push({ type: "shot", owner: owner.id, pos, kind: "sentry" });
+  }
+  if (!m.turrets.some((t) => t.life <= 0)) return;
+  for (const t of m.turrets) if (t.life <= 0) m.events.push({ type: "turretDown", id: t.id, pos: clone(t.pos) });
+  m.turrets = m.turrets.filter((t) => t.life > 0);
+}
+
+/** Tesla does not stop at one body: it jumps to the nearest one it has not touched, a few times over. */
+function chain(m: Match, att: Fighter, first: Fighter, damage: number): void {
+  const done = [first.id];
+  let from = first;
+  for (let n = 0; n < C.CHAIN_JUMPS && m.phase === "fight"; n++) {
+    let next: Fighter | null = null;
+    for (const g of m.fighters) {
+      if (g.team === att.team || done.includes(g.id) || !isUp(g) || !canBeHit(g)) continue;
+      const d = dist(g.pos, from.pos);
+      if (d <= C.CHAIN_R && (!next || d < dist(next.pos, from.pos))) next = g;
+    }
+    if (!next) return;
+    done.push(next.id);
+    m.events.push({ type: "arc", from: centerOf(from), to: centerOf(next) });
+    applyHit(m, att, next, { ...CHAIN_HIT, damage: damage * C.CHAIN_DMG }, normH(sub(next.pos, from.pos), dirOfYaw(att.yaw)), true);
+    from = next;
+  }
 }
 
 // ---------------------------------------------------------------- the cylinder
@@ -407,32 +611,89 @@ function workReload(m: Match, f: Fighter): void {
 
 // ---------------------------------------------------------------- winning
 
-/** A fighter is out of health: they drop to their knees and the winner decides how it ends. */
+/** Trouble has found this fighter's gang. The crew are all up; a leader only joins in if it was them who got hit. */
+function rouse(m: Match, f: Fighter): void {
+  if (f.gang < 0) return;
+  if (f.rank === "named") f.awake = true;
+  let fresh = false;
+  for (const g of m.fighters) {
+    if (g.gang !== f.gang || g.rank !== "rabble" || g.awake || !isUp(g)) continue;
+    g.awake = true;
+    fresh = true;
+  }
+  if (fresh) m.events.push({ type: "alert", gang: f.gang, pos: centerOf(f) });
+}
+
+/** One of the rabble is finished. They do not get a verdict: they get thrown out of the fight. */
+function dropRabble(m: Match, f: Fighter, dir: V3): void {
+  if (f.state === "ko") return;
+  const by = blameOf(m, f);
+  f.hp = 0;
+  f.turn = 0;
+  for (const k of STATUSES) f.status[k] = 0;
+  setState(f, "ko");
+  f.vel = v3(dir.x * C.RABBLE_KO_V, 11, dir.z * C.RABBLE_KO_V);
+  f.grounded = false;
+  f.pos.y = Math.max(f.pos.y, 0.05);
+  m.events.push({ type: "down", id: f.id, by: by ? by.id : -1, pos: centerOf(f) });
+}
+
+/**
+ * A fighter is out of health. Rabble are simply out. A hero or a leader drops to their
+ * knees, and the one who beat them decides how it ends.
+ */
 function defeat(m: Match, loser: Fighter, dir: V3): void {
+  if (loser.rank === "rabble") return dropRabble(m, loser, dir);
   if (m.phase !== "fight") return;
-  const winner = m.fighters[1 - loser.id];
+  const winner = blameOf(m, loser) ?? m.fighters.find((g) => g.team !== loser.team)!;
   m.winner = winner.id;
+  m.loser = loser.id;
   m.projectiles = [];
   m.standoff = null;
   m.cine = null;
+  m.callout = -1;
   clearZones(m);
+  clearTurrets(m);
   for (const f of m.fighters) for (const k of STATUSES) f.status[k] = 0;
   endCombo(m, winner);
+  if (winner.rank === "rabble") {
+    // Run down by a crew. Nobody stops to ask how the hero would like to go.
+    setState(loser, "ko");
+    loser.vel = v3(dir.x * 12, 7, dir.z * 12);
+    loser.grounded = false;
+    m.outcome = "dead";
+    m.phase = "ko";
+    m.phaseT = 0;
+    m.events.push({ type: "ko", winner: winner.id, loser: loser.id, pos: clone(loser.pos), alive: false, bounty: 0 });
+    m.events.push({ type: "phase", phase: "ko" });
+    return;
+  }
+  for (const g of m.fighters) {
+    if (g === winner || g === loser || !isUp(g)) continue;
+    // Everyone else holds still while it is settled, and a beaten leader's crew lose their nerve.
+    stopH(g);
+    if (g.rank !== "rabble" || g.gang < 0 || g.gang !== loser.gang) continue;
+    g.hp = 0;
+    g.awake = false;
+    g.turn = 0;
+    setState(g, "downed");
+    m.events.push({ type: "down", id: g.id, by: winner.id, pos: centerOf(g) });
+  }
   setState(loser, "downed");
   loser.vel = v3(dir.x * 5, loser.grounded ? 0 : loser.vel.y, dir.z * 5);
   toFree(winner);
   stopH(winner);
   m.phase = "verdict";
   m.phaseT = 0;
-  m.verdict = { t: 0, choice: null, at: 0 };
+  m.verdict = { winner: winner.id, loser: loser.id, t: 0, choice: null, at: 0 };
   m.events.push({ type: "verdictStart", winner: winner.id, pos: clone(loser.pos) });
   m.events.push({ type: "phase", phase: "verdict" });
 }
 
-function stepVerdict(m: Match, inputs: [InputFrame, InputFrame]): void {
+function stepVerdict(m: Match, inputs: readonly InputFrame[]): void {
   const v = m.verdict!;
-  const w = m.fighters[m.winner];
-  const l = m.fighters[1 - m.winner];
+  const w = m.fighters[v.winner];
+  const l = m.fighters[v.loser];
   v.t++;
   const dir = toTarget(w, l);
   w.yaw = yawOf(dir);
@@ -447,7 +708,7 @@ function stepVerdict(m: Match, inputs: [InputFrame, InputFrame]): void {
       setState(w, "chase");
       m.events.push({ type: "chase", id: w.id, pos: clone(w.pos) });
     }
-    const stepLen = Math.min(kitOf(w).chaseSpeed * C.DT, gap - 3.8);
+    const stepLen = Math.min(Math.max(kitOf(w).chaseSpeed, 60) * C.DT, gap - 3.8);
     w.pos.x += dir.x * stepLen;
     w.pos.z += dir.z * stepLen;
     w.pos.y = Math.max(0, w.pos.y + clamp(l.pos.y - w.pos.y, -stepLen, stepLen));
@@ -458,7 +719,7 @@ function stepVerdict(m: Match, inputs: [InputFrame, InputFrame]): void {
   if (w.state === "chase") toFree(w);
 
   if (v.choice === null) {
-    const inp = inputs[m.winner];
+    const inp = inputs[v.winner] ?? blankInput();
     const shot = inp.shot && !w.prev.shot;
     const rope = inp.special && !w.prev.special;
     const timeUp = v.t >= C.VERDICT_T;
@@ -485,11 +746,21 @@ function stepVerdict(m: Match, inputs: [InputFrame, InputFrame]): void {
     l.grounded = false;
     m.hitstop = 12;
   }
+  // Only the hero collects.
+  const paid = w.rank === "hero" ? (alive ? C.BOUNTY_ALIVE : C.BOUNTY_DEAD) : 0;
+  m.bounty += paid;
   m.verdict = null;
   m.outcome = alive ? "alive" : "dead";
+  m.events.push({ type: "ko", winner: w.id, loser: l.id, pos: clone(l.pos), alive, bounty: paid });
+  // In open country the day is not over while another gang's leader is still standing.
+  if (m.opts.mode === "roam" && w.rank === "hero" && m.fighters.some((g) => g.rank === "named" && g.team !== w.team && isUp(g))) {
+    m.phase = "fight";
+    m.phaseT = 0;
+    m.events.push({ type: "phase", phase: "fight" });
+    return;
+  }
   m.phase = "ko";
   m.phaseT = 0;
-  m.events.push({ type: "ko", winner: w.id, pos: clone(l.pos), alive });
   m.events.push({ type: "phase", phase: "ko" });
 }
 
@@ -503,6 +774,13 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
 
   // Light shots cannot stop a chase dash, or a thunderclap once it is coming.
   if (projectile && hb.strength === 1 && (def.state === "chase" || def.move === "thunderclap")) return false;
+
+  def.lastHitBy = att.id;
+  rouse(m, def);
+  // A crowd fight should not stutter: hits on or by rabble barely freeze it.
+  const crowd = att.rank === "rabble" || def.rank === "rabble";
+  const stop = crowd ? Math.min(hb.hitstop, C.RABBLE_HITSTOP) : hb.hitstop;
+  const power = kitOf(att).power;
 
   if (def.state === "guard" || def.state === "blockstun") {
     const perfect = def.state === "guard" && def.guardT <= C.PERFECT_WINDOW;
@@ -524,7 +802,7 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
         return true;
       }
     }
-    const chip = dealDamage(m, att, def, hb.damage * mult * C.CHIP, false);
+    const chip = dealDamage(m, att, def, hb.damage * mult * power * C.CHIP, false);
     def.guardHp -= hb.guardDamage;
     m.events.push({ type: "hit", att: att.id, def: def.id, pos, strength: hb.strength, effect: hb.effect, damage: chip, blocked: true, perfect: false, projectile });
     if (def.guardHp <= 0) {
@@ -536,24 +814,30 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
     } else {
       setState(def, "blockstun", hb.blockstun);
       def.vel = v3(dir.x * 3.5, def.grounded ? 0 : def.vel.y, dir.z * 3.5);
-      m.hitstop = Math.max(m.hitstop, Math.min(hb.hitstop, 4));
+      m.hitstop = Math.max(m.hitstop, Math.min(stop, 4));
     }
     return true;
   }
 
-  const scaling = Math.max(C.SCALE_MIN, 1 - C.SCALE_STEP * att.combo.hits);
-  const dmg = hb.damage * mult * scaling * (att.awakened > 0 ? C.AWAKEN_DMG : 1) * (def.status.hex > 0 ? C.HEX_DMG : 1);
+  // A long combo on one fighter hits softer as it goes. A swing through a crowd does not.
+  const scaling = def.rank === "rabble" ? 1 : Math.max(C.SCALE_MIN, 1 - C.SCALE_STEP * att.combo.hits);
+  const dmg = hb.damage * mult * power * scaling * (att.awakened > 0 ? C.AWAKEN_DMG : 1) * (def.status.hex > 0 ? C.HEX_DMG : 1);
   const dealt = dealDamage(m, att, def, dmg);
   att.combo.hits++;
   def.hitsTaken++;
   att.meter = Math.min(C.METER, att.meter + hb.meter);
   def.meter = Math.min(C.METER, def.meter + hb.meter * 0.5);
 
+  // Rabble fly further the more they have been hurt, and a solid hit on a hurt one takes them off their feet.
+  const rabble = def.rank === "rabble";
+  const hurt = rabble ? 1 - def.hp / def.maxHp : 0;
+  const fly = 1 + C.SMASH * hurt;
   let effect = hb.effect;
-  if (effect === "launch" && att.combo.launches >= kitOf(att).maxLaunches) effect = "blast";
+  if (effect === "launch" && !rabble && att.combo.launches >= kitOf(att).maxLaunches) effect = "blast";
+  if (rabble && hurt >= C.SMASH_TUMBLE && hb.strength >= 2 && (effect === "reel" || effect === "stagger")) effect = "blast";
 
   if (def.hp <= 0) {
-    m.hitstop = Math.max(m.hitstop, 14);
+    m.hitstop = Math.max(m.hitstop, rabble ? C.RABBLE_HITSTOP + 2 : 14);
     m.events.push({ type: "hit", att: att.id, def: def.id, pos, strength: 3, effect, damage: dealt, blocked: false, perfect: false, projectile });
     defeat(m, def, dir);
     return true;
@@ -573,13 +857,13 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
         def.vel = v3(dir.x * 1.5, 3.2, dir.z * 1.5);
         def.grounded = false;
       } else {
-        def.vel = v3(dir.x * 5, 0, dir.z * 5);
+        def.vel = v3(dir.x * 5 * fly, 0, dir.z * 5 * fly);
       }
       break;
     }
     case "stagger":
       setState(def, "stagger", hb.stun);
-      def.vel = v3(dir.x * 3, 0, dir.z * 3);
+      def.vel = v3(dir.x * 3 * fly, 0, dir.z * 3 * fly);
       break;
     case "launch":
       att.combo.launches++;
@@ -589,7 +873,7 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
       def.pos.y = Math.max(def.pos.y, 0.05);
       break;
     case "blast":
-      setBlasted(def, dir, projectile ? 0.6 : 1);
+      setBlasted(def, dir, (projectile ? 0.6 : 1) * (rabble ? C.RABBLE_BLAST * fly : 1));
       break;
     case "slam":
       if (airborne) {
@@ -605,35 +889,42 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
       break;
   }
 
-  m.hitstop = Math.max(m.hitstop, hb.hitstop);
+  m.hitstop = Math.max(m.hitstop, stop);
   m.events.push({ type: "hit", att: att.id, def: def.id, pos, strength: hb.strength, effect, damage: dealt, blocked: false, perfect: false, projectile });
   if (hb.status) applyStatus(m, def, hb.status);
   return true;
 }
 
+/** One swing hits every enemy in its reach, once each. */
 function resolveStrikes(m: Match): void {
-  for (let i = 0; i < 2; i++) {
-    const f = m.fighters[i];
-    const o = m.fighters[1 - i];
+  for (const f of m.fighters) {
     if (f.state !== "attack" || !f.move) continue;
     const mv = MOVES[f.move];
     for (let h = 0; h < mv.hits.length; h++) {
-      let hb = mv.hits[h];
-      if (f.hitDone[h] || f.mf < hb.from || f.mf > hb.to) continue;
-      const d = distH(f.pos, o.pos);
-      if (d > hb.range || Math.abs(o.pos.y - f.pos.y) > (hb.aoe ? 2.6 : 1.8)) continue;
-      const dir = toTarget(f, o);
-      if (!hb.aoe && d > 0.8 && Math.abs(angleDiff(yawOf(dir), f.yaw)) > 1.75) continue;
-      // An ender only sends them flying if a round, or the brace, went off behind it.
-      let mult = 1;
-      if (mv.round || mv.nerve) {
-        if (f.enderLive) mult = f.enderMult;
-        else hb = dryEnder(hb);
+      const base = mv.hits[h];
+      if (f.mf < base.from || f.mf > base.to) continue;
+      for (const o of m.fighters) {
+        const key = h * 1000 + o.id;
+        if (o.team === f.team || f.hitIds.includes(key)) continue;
+        const d = distH(f.pos, o.pos);
+        if (d > base.range || Math.abs(o.pos.y - f.pos.y) > (base.aoe ? 2.6 : 1.8)) continue;
+        const dir = toTarget(f, o);
+        if (!base.aoe && d > 0.8 && Math.abs(angleDiff(yawOf(dir), f.yaw)) > 1.75) continue;
+        // An ender only sends them flying if a round, or the brace, went off behind it.
+        let hb = base;
+        let mult = 1;
+        if (mv.round || mv.nerve) {
+          if (f.enderLive) mult = f.enderMult;
+          else hb = dryEnder(hb);
+        }
+        if (applyHit(m, f, o, hb, dir, false, mult)) {
+          f.hitIds.push(key);
+          f.moveHit = true;
+        }
+        if (m.phase !== "fight") return;
+        if (f.state !== "attack") break;
       }
-      if (applyHit(m, f, o, hb, dir, false, mult)) {
-        f.hitDone[h] = true;
-        f.moveHit = true;
-      }
+      if (f.state !== "attack") break;
     }
   }
 }
@@ -654,7 +945,7 @@ function spawnProjectile(
   const from = centerOf(f);
   const aim = norm(sub(centerOf(o), from), dirOfYaw(f.yaw));
   const pos = add(from, scale(aim, 0.8));
-  m.projectiles.push({ id: m.nextProjId++, kind, owner: f.id, pos, prev: clone(pos), vel: scale(aim, speed), life, radius, damage, status: extra.status, homing: extra.homing ?? 0 });
+  m.projectiles.push({ id: m.nextProjId++, kind, owner: f.id, pos, prev: clone(pos), vel: scale(aim, speed), life, radius, damage, status: extra.status, homing: extra.homing ?? 0, target: o.id, hit: [] });
   return pos;
 }
 
@@ -712,6 +1003,13 @@ function startChase(m: Match, f: Fighter): void {
 /** Dash button: a homing chase when there is distance, otherwise a short evasive step. Either spends a dash charge. */
 function startDash(m: Match, f: Fighter, o: Fighter, inp: InputFrame): boolean {
   if (f.dashes <= 0) return false;
+  if (o.id < 0) {
+    // Nobody to chase or to dodge: the dash covers ground, the way the stick points.
+    const way = steer(f, o, inp);
+    if (lenH(way) > 0.2) f.yaw = yawOf(way);
+    startChase(m, f);
+    return true;
+  }
   const fwd = toTarget(f, o);
   const hasDir = Math.hypot(inp.mx, inp.my) > 0.4;
   const evasive = hasDir && (Math.abs(inp.mx) > 0.4 || inp.my < -0.4);
@@ -790,6 +1088,8 @@ function finishSlip(m: Match, f: Fighter, o: Fighter): void {
 /** The lasso connected. Either the target is dragged in, or the thrower zips out to it. */
 function rope(m: Match, att: Fighter, def: Fighter): void {
   const dir = toTarget(att, def);
+  def.lastHitBy = att.id;
+  rouse(m, def);
   att.combo.hits++;
   def.hitsTaken++;
   att.moveHit = true;
@@ -830,7 +1130,7 @@ function startCine(m: Match, att: Fighter, def: Fighter): void {
   const dir = toTarget(att, def);
   const gap = clamp(distH(att.pos, def.pos), 7, 10);
   def.pos = v3(att.pos.x + dir.x * gap, att.pos.y, att.pos.z + dir.z * gap);
-  const over = lenH(def.pos) - (C.ARENA_R - 1);
+  const over = lenH(def.pos) - (m.radius - 1);
   if (over > 0) {
     const out = normH(def.pos, dir);
     for (const f of [att, def]) {
@@ -851,6 +1151,7 @@ function stepCine(m: Match): void {
   const def = m.fighters[cine.def];
   cine.t++;
   const boost = att.awakened > 0 ? C.AWAKEN_DMG : 1;
+  def.lastHitBy = att.id;
   if ((C.CINE_HITS as readonly number[]).includes(cine.t)) {
     dealDamage(m, att, def, C.CINE_HIT_DMG * boost, false);
     att.combo.hits++;
@@ -879,10 +1180,12 @@ function stepCine(m: Match): void {
 
 // ---------------------------------------------------------------- the standoff
 
-/** Both fighters freeze, hands over their holsters, and wait for the bell. */
-function startStandoff(m: Match, opening: boolean): void {
-  const [a, b] = m.fighters;
+/** Two fighters freeze, hands over their holsters, and wait for the bell. */
+function startStandoff(m: Match, ids: [number, number], opening: boolean): void {
+  const a = m.fighters[ids[0]];
+  const b = m.fighters[ids[1]];
   m.standoff = {
+    ids,
     t: 0,
     bellAt: m.rng.int(C.STANDOFF_WAIT_MIN, C.STANDOFF_WAIT_MAX),
     lock: [0, 0],
@@ -890,43 +1193,47 @@ function startStandoff(m: Match, opening: boolean): void {
   };
   endCombo(m, a);
   endCombo(m, b);
-  for (const f of m.fighters) {
+  for (const f of [a, b]) {
     setState(f, "standoff");
     f.vel = v3();
     for (const btn of BUTTONS) f.buf[btn] = 0;
   }
+  a.target = b.id;
+  b.target = a.id;
   a.yaw = yawOf(toTarget(a, b));
   b.yaw = yawOf(toTarget(b, a));
   m.projectiles = [];
   m.events.push({ type: "standoffStart", opening });
 }
 
-function stepStandoff(m: Match, inputs: [InputFrame, InputFrame]): void {
+function stepStandoff(m: Match, inputs: readonly InputFrame[]): void {
   const s = m.standoff!;
+  const pair = [m.fighters[s.ids[0]], m.fighters[s.ids[1]]];
   s.t++;
   if (s.t === s.bellAt) m.events.push({ type: "standoffBell" });
 
   const drew = [false, false];
   for (let i = 0; i < 2; i++) {
-    const f = m.fighters[i];
-    if (!inputs[i].shot || f.prev.shot) continue;
+    const f = pair[i];
+    const inp = inputs[f.id];
+    if (!inp || !inp.shot || f.prev.shot) continue;
     if (s.t < s.bellAt) {
       // Too soon. The hand twitches, and it costs you the first instant after the bell.
       if (s.lock[i] === 0) {
         s.lock[i] = s.bellAt + C.FLINCH_LOCK;
-        m.events.push({ type: "standoffFlinch", id: i });
+        m.events.push({ type: "standoffFlinch", id: f.id });
       }
     } else if (s.t >= s.lock[i]) drew[i] = true;
   }
 
   if (!drew[0] && !drew[1] && s.t < s.bellAt + C.STANDOFF_WINDOW) return;
   // It is over one way or another. The draw itself must not also come out as an ordinary shot.
-  for (const f of m.fighters) f.buf.shot = 0;
+  for (const f of pair) f.buf.shot = 0;
 
   if (!drew[0] && !drew[1]) {
     m.standoff = null;
     m.standoffCd = C.STANDOFF_CD;
-    for (const f of m.fighters) toFree(f);
+    for (const f of pair) toFree(f);
     m.events.push({ type: "standoffEnd", winner: -1, trade: false });
     return;
   }
@@ -935,9 +1242,9 @@ function stepStandoff(m: Match, inputs: [InputFrame, InputFrame]): void {
   m.standoffCd = C.STANDOFF_CD;
   if (drew[0] && drew[1]) {
     // Both shots on the same instant: the bullets meet and nobody is hit.
-    for (const f of m.fighters) {
-      const o = m.fighters[1 - f.id];
-      const dir = toTarget(f, o);
+    for (let i = 0; i < 2; i++) {
+      const f = pair[i];
+      const dir = toTarget(f, pair[1 - i]);
       f.shotPose = 20;
       m.events.push({ type: "shot", owner: f.id, pos: add(centerOf(f), scale(dir, 0.8)), kind: "quick" });
       setState(f, "parried", 30);
@@ -948,8 +1255,8 @@ function stepStandoff(m: Match, inputs: [InputFrame, InputFrame]): void {
     return;
   }
 
-  const w = m.fighters[drew[0] ? 0 : 1];
-  const l = m.fighters[1 - w.id];
+  const w = pair[drew[0] ? 0 : 1];
+  const l = pair[drew[0] ? 1 : 0];
   const dir = toTarget(w, l);
   toFree(w);
   w.shotPose = 22;
@@ -957,6 +1264,7 @@ function stepStandoff(m: Match, inputs: [InputFrame, InputFrame]): void {
   if (w.ammo > 0 && w.reload === 0 && kitOf(w).gun !== "none") spendRound(m, w);
   m.events.push({ type: "shot", owner: w.id, pos: add(centerOf(w), scale(dir, 0.8)), kind: "quick" });
   // The shot that opens a duel wounds; it never ends it.
+  l.lastHitBy = w.id;
   const dealt = dealDamage(m, w, l, C.STANDOFF_DMG, !s.opening);
   w.combo.hits++;
   l.hitsTaken++;
@@ -1012,7 +1320,7 @@ function freeLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
   if (f.meter >= C.LARIAT_COST && consume(f, "special")) {
     f.meter -= C.LARIAT_COST;
     f.zipFlag = inp.tilt < -0.5;
-    startMove(f, o, kitOf(f).special === "canister" ? "canister" : "lariat");
+    startMove(f, o, kitOf(f).special === "sentry" ? "sentry" : "lariat");
     return;
   }
   if (inp.guard) {
@@ -1033,18 +1341,13 @@ function freeLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
   if (f.state !== "free") return;
   if (consume(f, "jump")) doJump(m, f, o);
 
-  let mx = inp.mx;
-  let my = inp.my;
-  const l = Math.hypot(mx, my);
-  if (l > 1) {
-    mx /= l;
-    my /= l;
-  }
   const k = kitOf(f);
   const speed = (f.grounded ? k.run : k.airRun) * (f.status.shock > 0 ? C.SHOCK_SLOW : 1);
-  const right = rightOf(fwd);
-  f.vel.x = (fwd.x * my + right.x * mx) * speed;
-  f.vel.z = (fwd.z * my + right.z * mx) * speed;
+  const way = steer(f, o, inp);
+  f.vel.x = way.x * speed;
+  f.vel.z = way.z * speed;
+  // With nobody to face, face the way you are going.
+  if (o.id < 0 && lenH(way) > 0.2) f.yaw = yawOf(way);
 }
 
 /** Holstered and still. Nerve builds, rounds slide home, and the quickdraw arms. */
@@ -1161,7 +1464,7 @@ function attackLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
         m.events.push({ type: "shot", owner: f.id, pos, kind: tesla ? "tesla" : "quick" });
       }
     } else if (f.move === "circle") spawnZone(m, f, "hex", o.pos);
-    else if (f.move === "canister") spawnZone(m, f, "gas", o.pos);
+    else if (f.move === "sentry") setSentry(m, f);
     else if (f.move === "lariat") spawnProjectile(m, f, o, "lasso", C.LASSO_SPEED, C.LASSO_LIFE, 0.5);
     else if (f.move === "lastWord") spawnProjectile(m, f, o, "ult", C.ULT_SPEED, C.ULT_LIFE, 0.9);
   }
@@ -1187,7 +1490,7 @@ function attackLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
       if (f.move !== "lariat" && f.meter >= C.LARIAT_COST && consume(f, "special")) {
         f.meter -= C.LARIAT_COST;
         f.zipFlag = inp.tilt < -0.5;
-        return startMove(f, o, kitOf(f).special === "canister" ? "canister" : "lariat");
+        return startMove(f, o, kitOf(f).special === "sentry" ? "sentry" : "lariat");
       }
       if (f.buf.dash > 0) {
         const move = f.move;
@@ -1229,8 +1532,12 @@ function chaseLogic(m: Match, f: Fighter, o: Fighter): void {
       m.events.push({ type: "chaseCatch", id: f.id, pos: centerOf(o) });
     }
   } else if (arrived && k.tackle) {
-    // The hunter's dash is a shoulder charge: it hits whoever it reaches.
-    applyHit(m, f, o, TACKLE, toTarget(f, o), false);
+    // The hunter's dash is a shoulder charge: it hits whoever it reaches, and anyone standing with them.
+    for (const g of m.fighters) {
+      if (g.team === f.team || (g !== o && dist(f.pos, g.pos) > C.TACKLE_R)) continue;
+      applyHit(m, f, g, TACKLE, toTarget(f, g), false);
+      if (m.phase !== "fight" || f.state !== "chase") break;
+    }
     if (f.state !== "chase") return;
   }
   toFree(f);
@@ -1238,7 +1545,9 @@ function chaseLogic(m: Match, f: Fighter, o: Fighter): void {
 }
 
 function stunLogic(m: Match, f: Fighter, o: Fighter): void {
-  if (trySlip(m, f, o)) return;
+  // The way out of a combo is aimed at whoever is doing the hitting, not at whoever we were facing.
+  const by = blameOf(m, f) ?? o;
+  if (trySlip(m, f, by)) return;
   switch (f.state) {
     case "hitstun":
     case "stagger":
@@ -1267,7 +1576,7 @@ function stunLogic(m: Match, f: Fighter, o: Fighter): void {
     case "slammed":
       if (f.grounded) {
         m.events.push({ type: "groundSlam", id: f.id, pos: clone(f.pos) });
-        dealDamage(m, o, f, 20, false);
+        dealDamage(m, by.id < 0 ? null : by, f, 20, false);
         setState(f, "bounced");
         f.vel = v3(f.vel.x * 0.3, C.BOUNCE_V, f.vel.z * 0.3);
         f.grounded = false;
@@ -1303,17 +1612,10 @@ function guardLogic(f: Fighter, o: Fighter, inp: InputFrame): void {
     f.vel.z *= 0.9;
   } else if (k.guardWalk > 0) {
     // The hunter advances behind the brace.
-    let mx = inp.mx;
-    let my = inp.my;
-    const l = Math.hypot(mx, my);
-    if (l > 1) {
-      mx /= l;
-      my /= l;
-    }
-    const right = rightOf(fwd);
+    const way = steer(f, o, inp);
     const speed = k.run * k.guardWalk;
-    f.vel.x = (fwd.x * my + right.x * mx) * speed;
-    f.vel.z = (fwd.z * my + right.z * mx) * speed;
+    f.vel.x = way.x * speed;
+    f.vel.z = way.z * speed;
   } else stopH(f);
   // Strike from behind the brace is the thunderclap.
   if (k.thunderclap && f.meter >= C.CLAP_COST && consume(f, "strike")) {
@@ -1373,7 +1675,7 @@ function logic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
       if (f.t >= f.dur) toFree(f);
       break;
     case "slip":
-      if (f.t >= C.SLIP_T) finishSlip(m, f, o);
+      if (f.t >= C.SLIP_T) finishSlip(m, f, blameOf(m, f) ?? o);
       break;
     case "zip": {
       const left = Math.max(1, f.dur - f.t + 1);
@@ -1387,9 +1689,13 @@ function logic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
       break;
     }
     case "burst":
-      if (f.t === 6 && dist(f.pos, o.pos) <= 7 && canBeHit(o)) {
-        setBlasted(o, toTarget(f, o), 0.6);
-        endCombo(m, o);
+      // The burst throws back everyone standing close.
+      if (f.t === 6) {
+        for (const g of m.fighters) {
+          if (g.team === f.team || dist(f.pos, g.pos) > 7 || !canBeHit(g)) continue;
+          setBlasted(g, toTarget(f, g), 0.6);
+          endCombo(m, g);
+        }
       }
       if (f.t >= f.dur) toFree(f);
       break;
@@ -1483,12 +1789,12 @@ function updateProjectiles(m: Match): void {
   const keep: Projectile[] = [];
   for (const p of m.projectiles) {
     const att = m.fighters[p.owner];
-    const def = m.fighters[1 - p.owner];
-    if (p.homing > 0) {
+    const aim = p.target >= 0 ? m.fighters[p.target] : null;
+    if (p.homing > 0 && aim && isUp(aim)) {
       // Bend toward the target, a little each tick.
       const sp = len(p.vel);
       const cur = scale(p.vel, 1 / sp);
-      const want = norm(sub(centerOf(def), p.pos), cur);
+      const want = norm(sub(centerOf(aim), p.pos), cur);
       const angle = Math.acos(clamp(cur.x * want.x + cur.y * want.y + cur.z * want.z, -1, 1));
       const t = angle < 1e-4 ? 1 : Math.min(1, p.homing / angle);
       p.vel = scale(norm(add(scale(cur, 1 - t), scale(want, t)), cur), sp);
@@ -1496,9 +1802,13 @@ function updateProjectiles(m: Match): void {
     assign(p.prev, p.pos);
     p.pos = add(p.pos, scale(p.vel, C.DT));
     p.life--;
-    let alive = p.life > 0 && lenH(p.pos) < C.ARENA_R + 20 && p.pos.y > -0.5;
+    let alive = p.life > 0 && lenH(p.pos) < m.radius + 20 && p.pos.y > -0.5;
 
-    if (alive && canBeHit(def) && segPointDist(p.prev, p.pos, centerOf(def)) <= p.radius + 0.7) {
+    // It hits the first enemy in its path, whoever it was aimed at.
+    for (const def of m.fighters) {
+      if (!alive || m.phase !== "fight") break;
+      if (def.team === att.team || p.hit.includes(def.id) || !canBeHit(def)) continue;
+      if (segPointDist(p.prev, p.pos, centerOf(def)) > p.radius + 0.7) continue;
       const dir = normH(p.vel, dirOfYaw(att.yaw));
       if (p.kind === "bullet" || p.kind === "quick" || p.kind === "bolt") {
         const hb: HitBox = p.kind === "bolt" ? { ...BOLT_HIT, damage: p.damage } : { ...PROJ_HITS[p.kind], damage: p.damage, status: p.status };
@@ -1506,19 +1816,38 @@ function updateProjectiles(m: Match): void {
           // Caught on the brace at the perfect moment: the shot goes back where it came from.
           const speed = len(p.vel);
           p.owner = def.id;
+          p.target = att.id;
+          p.hit = [];
           p.vel = scale(norm(sub(centerOf(att), p.pos), scale(dir, -1)), speed);
           p.life = C.BULLET_LIFE;
           assign(p.prev, p.pos);
           def.meter = Math.min(C.METER, def.meter + 8);
           m.hitstop = Math.max(m.hitstop, 6);
           m.events.push({ type: "deflect", id: def.id, pos: clone(p.pos), back: true });
-        } else if (applyHit(m, att, def, hb, dir, true)) alive = false;
+          break;
+        }
+        if (applyHit(m, att, def, hb, dir, true)) {
+          if (p.kind === "quick" && p.status === "shock") {
+            chain(m, att, def, p.damage);
+            alive = false;
+          }
+          // A quickdraw goes clean through rabble and keeps going.
+          else if (p.kind === "quick" && def.rank === "rabble") p.hit.push(def.id);
+          else alive = false;
+        }
       } else if (p.kind === "lasso") {
         rope(m, att, def);
         alive = false;
       } else if (p.kind === "ult") {
+        if (def.rank === "rabble") {
+          // The Last Word does not stop for rabble.
+          p.hit.push(def.id);
+          applyHit(m, att, def, ULT_GRAZE, dir, true);
+          continue;
+        }
         alive = false;
         if (def.state === "guard" || def.state === "blockstun") {
+          def.lastHitBy = att.id;
           dealDamage(m, att, def, 40, false);
           def.guardHp = C.GUARD_HP * 0.5;
           setState(def, "stagger", C.GUARD_BREAK_STUN);
@@ -1526,6 +1855,7 @@ function updateProjectiles(m: Match): void {
           m.hitstop = Math.max(m.hitstop, 12);
           m.events.push({ type: "guardBreak", id: def.id, pos: centerOf(def) });
         } else {
+          rouse(m, def);
           startCine(m, att, def);
           return;
         }
@@ -1558,13 +1888,38 @@ function updateProjectiles(m: Match): void {
   m.projectiles = m.phase === "fight" ? keep : [];
 }
 
+/** A body sent flying takes its own side's rabble down with it. */
+function bowl(m: Match, a: Fighter, b: Fighter): boolean {
+  if (a.team !== b.team || b.rank !== "rabble" || m.phase !== "fight") return false;
+  if ((a.state !== "blasted" && a.state !== "ko") || lenH(a.vel) < C.BOWL_SPEED) return false;
+  if (!canBeHit(b) || isFlying(b)) return false;
+  const dir = normH(a.vel, dirOfYaw(a.yaw));
+  const by = blameOf(m, a);
+  b.lastHitBy = a.lastHitBy;
+  b.hitsTaken++;
+  if (by) by.combo.hits++;
+  const dealt = dealDamage(m, by, b, C.BOWL_DMG);
+  a.vel.x *= 0.8;
+  a.vel.z *= 0.8;
+  m.events.push({ type: "hit", att: by ? by.id : a.id, def: b.id, pos: centerOf(b), strength: 2, effect: "blast", damage: dealt, blocked: false, perfect: false, projectile: false });
+  if (b.hp <= 0) defeat(m, b, dir);
+  else setBlasted(b, dir, C.BOWL_POWER);
+  return true;
+}
+
 function collideWorld(m: Match): void {
-  const [a, b] = m.fighters;
   // Fighters push each other apart unless one is passing through.
-  if (!NO_PUSH.has(a.state) && !NO_PUSH.has(b.state) && Math.abs(a.pos.y - b.pos.y) < 1.6) {
-    const d = distH(a.pos, b.pos);
-    const min = C.BODY_R * 2;
-    if (d < min) {
+  const fs = m.fighters;
+  for (let i = 0; i < fs.length; i++) {
+    const a = fs[i];
+    for (let j = i + 1; j < fs.length; j++) {
+      const b = fs[j];
+      if (Math.abs(a.pos.y - b.pos.y) >= 1.6) continue;
+      const d = distH(a.pos, b.pos);
+      const min = C.BODY_R * 2;
+      if (d >= min) continue;
+      if (bowl(m, a, b) || bowl(m, b, a)) continue;
+      if (NO_PUSH.has(a.state) || NO_PUSH.has(b.state)) continue;
       const dir = normH(sub(b.pos, a.pos), dirOfYaw(a.yaw));
       const push = (min - d) / 2;
       a.pos.x -= dir.x * push;
@@ -1575,7 +1930,6 @@ function collideWorld(m: Match): void {
   }
 
   for (const f of m.fighters) {
-    const o = m.fighters[1 - f.id];
     const smashing = (f.state === "blasted" || f.state === "ko") && lenH(f.vel) > 8;
     const passing = smashing || f.state === "chase";
     for (let i = 0; i < m.props.length; i++) {
@@ -1591,7 +1945,7 @@ function collideWorld(m: Match): void {
         if (smashing) {
           f.vel.x *= 0.88;
           f.vel.z *= 0.88;
-          if (f.state === "blasted") dealDamage(m, o, f, 10, false);
+          if (f.state === "blasted") dealDamage(m, blameOf(m, f), f, 10, false);
         }
       } else if (f.state !== "slip" && f.state !== "cine") {
         const dir = normH(sub(f.pos, prop.pos), dirOfYaw(f.yaw + Math.PI));
@@ -1601,9 +1955,9 @@ function collideWorld(m: Match): void {
     }
 
     const r = lenH(f.pos);
-    if (r > C.ARENA_R) {
-      f.pos.x *= C.ARENA_R / r;
-      f.pos.z *= C.ARENA_R / r;
+    if (r > m.radius) {
+      f.pos.x *= m.radius / r;
+      f.pos.z *= m.radius / r;
       if (f.state === "blasted") {
         stopH(f);
         setState(f, "launched");
@@ -1613,9 +1967,131 @@ function collideWorld(m: Match): void {
   }
 }
 
+// ---------------------------------------------------------------- the overworld
+
+/** Who each fighter is facing. A duel has no choice to make; open country does. */
+function retarget(m: Match): void {
+  if (m.opts.mode !== "roam") return;
+  const hero = m.fighters[0];
+  // The gangs only have eyes for the hero.
+  for (const f of m.fighters) {
+    if (f.team !== hero.team) f.target = f.awake && isUp(f) && isUp(hero) ? hero.id : -1;
+  }
+  const cur = targetOf(m, hero);
+  const asked = hero.buf.swap > 0;
+  hero.buf.swap = 0;
+  const held = cur !== null && isUp(cur) && distH(hero.pos, cur.pos) <= C.UNLOCK_R;
+  if (held && !asked) return;
+  // Trouble picks itself: the nearest enemy who is up and looking for a fight.
+  // Asking for a target reaches further, to anyone in range, so the hero can open on a camp.
+  const near = m.fighters
+    .filter((g) => g.team !== hero.team && isUp(g) && (asked || g.awake) && distH(hero.pos, g.pos) <= C.LOCK_R)
+    .sort((a, b) => distH(hero.pos, a.pos) - distH(hero.pos, b.pos) || a.id - b.id);
+  if (near.length === 0) hero.target = held ? cur.id : -1;
+  // Asking again while facing the only one there, and they have not noticed: let them be.
+  else if (asked && held && near.length === 1 && near[0] === cur && !cur.awake) hero.target = -1;
+  else hero.target = near[asked && cur ? (near.indexOf(cur) + 1) % near.length : 0].id;
+}
+
+/** Crews notice a hero who comes close, and give up on one who gets far from their camp. */
+function watch(m: Match): void {
+  const hero = m.fighters[0];
+  if (!isUp(hero)) return;
+  for (const f of m.fighters) {
+    if (f.rank !== "rabble" || !isUp(f)) continue;
+    const gap = distH(f.pos, hero.pos);
+    if (!f.awake) {
+      if (gap <= C.ALERT_R) rouse(m, f);
+    } else if (gap > C.ALERT_R && distH(f.home, hero.pos) > C.LEASH_R) {
+      f.awake = false;
+      f.turn = 0;
+    }
+  }
+}
+
+/**
+ * Rabble take turns. Only a few may attack at once, and turns are handed out a beat apart;
+ * the rest wait, and the one who has waited longest goes next.
+ */
+function passTurns(m: Match): void {
+  let active = 0;
+  let newest = 0;
+  let next: Fighter | null = null;
+  for (const f of m.fighters) {
+    if (f.rank !== "rabble" || !f.awake || !isUp(f)) continue;
+    if (f.turn > 0) {
+      f.turn--;
+      if (f.turn > 0) active++;
+      newest = Math.max(newest, f.turn);
+      continue;
+    }
+    f.waited++;
+    const o = targetOf(m, f);
+    if (!o || distH(f.pos, o.pos) > C.TURN_R || f.state !== "free") continue;
+    if (!next || f.waited > next.waited) next = f;
+  }
+  if (next && active < C.RABBLE_TURNS && newest <= C.RABBLE_TURN_T - C.RABBLE_TURN_GAP) {
+    next.turn = C.RABBLE_TURN_T;
+    next.waited = 0;
+  }
+}
+
+/** With nobody after them, the hero gets their wind back. */
+function rest(m: Match): void {
+  const hero = m.fighters[0];
+  if (!isUp(hero) || hero.hp >= hero.maxHp) return;
+  if (m.fighters.some((g) => g.team !== hero.team && g.awake && isUp(g))) return;
+  hero.hp = Math.min(hero.maxHp, hero.hp + hero.maxHp * C.REST_REGEN);
+}
+
+/** When a crew is beaten and their leader has not been touched, the leader steps out to settle it one on one. */
+function stepCallout(m: Match): void {
+  const hero = m.fighters[0];
+  if (m.callout < 0) {
+    for (const l of m.fighters) {
+      if (l.rank !== "named" || l.gang < 0 || l.awake || !isUp(l)) continue;
+      if (m.fighters.some((g) => g.gang === l.gang && g.rank === "rabble" && isUp(g))) continue;
+      m.callout = l.id;
+      m.calloutT = 0;
+      m.events.push({ type: "callOut", id: l.id, pos: centerOf(l) });
+      break;
+    }
+    return;
+  }
+  const l = m.fighters[m.callout];
+  if (l.awake || !isUp(l) || !isUp(hero)) {
+    m.callout = -1;
+    return;
+  }
+  // Nothing touches them on the way in.
+  m.calloutT++;
+  l.invuln = Math.max(l.invuln, 2);
+  const dir = toTarget(l, hero);
+  l.yaw = yawOf(dir);
+  const gap = distH(l.pos, hero.pos);
+  if (gap > C.CALLOUT_GAP) {
+    if (l.state !== "chase") {
+      setState(l, "chase");
+      m.events.push({ type: "chase", id: l.id, pos: clone(l.pos) });
+    }
+    const stepLen = Math.min(C.CALLOUT_SPEED * C.DT, gap - C.CALLOUT_GAP);
+    l.pos.x += dir.x * stepLen;
+    l.pos.z += dir.z * stepLen;
+    l.vel = v3();
+    return;
+  }
+  if (l.state === "chase") toFree(l);
+  // The bell waits for a hero who is on their feet, and not for long for one who keeps swinging.
+  const settled = hero.state === "free" || hero.state === "steady" || hero.state === "guard";
+  const able = !isStunned(hero) && hero.state !== "knockdown" && hero.state !== "getup" && hero.state !== "slip";
+  if (!hero.grounded || !(settled || (able && m.calloutT > C.CALLOUT_WAIT))) return;
+  m.callout = -1;
+  l.awake = true;
+  startStandoff(m, [hero.id, l.id], true);
+}
+
 function upkeep(m: Match): void {
   for (const f of m.fighters) {
-    const o = m.fighters[1 - f.id];
     const k = kitOf(f);
     if (f.pips < k.pips) {
       f.pipTimer += f.awakened > 0 ? 2 : 1;
@@ -1627,8 +2103,9 @@ function upkeep(m: Match): void {
     if (m.phase === "fight") {
       for (const st of STATUSES) if (f.status[st] > 0) f.status[st]--;
       if (f.status.poison > 0 && f.status.poison % C.POISON_EVERY === 0 && f.hp > 0) {
-        dealDamage(m, o, f, C.POISON_DMG);
-        if (f.hp <= 0) defeat(m, f, toTarget(o, f));
+        const by = blameOf(m, f);
+        dealDamage(m, by, f, C.POISON_DMG);
+        if (f.hp <= 0) defeat(m, f, by ? toTarget(by, f) : dirOfYaw(f.yaw + Math.PI));
       }
     }
     // Dashes come back one at a time. Running dry is a real cost, and shock stops the clock.
@@ -1654,9 +2131,10 @@ function upkeep(m: Match): void {
       f.awakened--;
       if (f.awakened === 0) m.events.push({ type: "awakenEnd", id: f.id });
     }
-    if (f.combo.hits > 0 && !isStunned(o) && o.state !== "cine") {
+    // A combo lasts for as long as anyone on the other side is still reeling.
+    if (f.combo.hits > 0 && !m.fighters.some((g) => g.team !== f.team && (isStunned(g) || g.state === "cine"))) {
       endCombo(m, f);
-      if (m.opts.training && o.id === 1 && m.phase === "fight") o.hp = o.maxHp;
+      if (m.opts.training && f.id === 0 && m.phase === "fight") m.fighters[1].hp = m.fighters[1].maxHp;
     }
     if (m.opts.training && f.id === 0) {
       f.meter = Math.min(C.METER, f.meter + 0.6);
@@ -1666,36 +2144,53 @@ function upkeep(m: Match): void {
 
   // Two gunfighters who both stop and hold steady have agreed to a standoff.
   if (m.standoffCd > 0) m.standoffCd--;
-  const [a, b] = m.fighters;
-  if (
-    m.phase === "fight" &&
-    !m.standoff &&
-    m.standoffCd === 0 &&
-    a.state === "steady" &&
-    b.state === "steady" &&
-    a.t >= C.STANDOFF_MUTUAL &&
-    b.t >= C.STANDOFF_MUTUAL
-  ) {
-    startStandoff(m, false);
+  if (m.phase === "fight" && !m.standoff && m.standoffCd === 0) {
+    for (const a of m.fighters) {
+      const b = targetOf(m, a);
+      if (!b || b.id < a.id || b.target !== a.id || a.rank === "rabble" || b.rank === "rabble") continue;
+      if (a.state !== "steady" || b.state !== "steady" || a.t < C.STANDOFF_MUTUAL || b.t < C.STANDOFF_MUTUAL) continue;
+      startStandoff(m, [a.id, b.id], false);
+      break;
+    }
+  }
+
+  if (m.opts.mode === "roam" && m.phase === "fight" && !m.standoff) {
+    watch(m);
+    passTurns(m);
+    stepCallout(m);
+    rest(m);
   }
 }
 
-function rememberInputs(m: Match, inputs: [InputFrame, InputFrame]): void {
-  for (let i = 0; i < 2; i++) m.fighters[i].prev = { ...inputs[i] };
+function rememberInputs(m: Match, inputs: readonly InputFrame[]): void {
+  for (const f of m.fighters) f.prev = { ...(inputs[f.id] ?? BLANK) };
+}
+
+const BLANK: Readonly<InputFrame> = blankInput();
+
+/** An awakened enemy slows this fighter: in a duel wherever they are, in open country when they are close. */
+function slowed(m: Match, f: Fighter): boolean {
+  if (f.awakened > 0) return false;
+  const duel = m.opts.mode === "duel";
+  return m.fighters.some((g) => g.team !== f.team && g.awakened > 0 && isUp(g) && (duel || distH(f.pos, g.pos) <= C.UNLOCK_R));
 }
 
 // ---------------------------------------------------------------- step
 
-/** Advances the match by one tick (1/60 s) and returns what happened. */
-export function stepMatch(m: Match, inputs: [InputFrame, InputFrame]): SimEvent[] {
+/**
+ * Advances the match by one tick (1/60 s) and returns what happened.
+ * `inputs` is indexed by fighter id. A fighter with no entry does nothing.
+ */
+export function stepMatch(m: Match, inputs: readonly InputFrame[]): SimEvent[] {
   m.events = [];
   if (m.phase === "done") return m.events;
   m.tick++;
 
   // Presses are buffered every tick, so one made during a freeze still comes out afterward.
-  for (let i = 0; i < 2; i++) {
-    const f = m.fighters[i];
-    for (const b of BUTTONS) if (inputs[i][b] && !f.prev[b]) f.buf[b] = C.BUFFER;
+  for (const f of m.fighters) {
+    const inp = inputs[f.id];
+    if (!inp) continue;
+    for (const b of BUTTONS) if (inp[b] && !f.prev[b]) f.buf[b] = C.BUFFER;
   }
 
   if (m.phase === "intro") {
@@ -1705,7 +2200,7 @@ export function stepMatch(m: Match, inputs: [InputFrame, InputFrame]): SimEvent[
       m.phase = "fight";
       m.phaseT = 0;
       m.events.push({ type: "phase", phase: "fight" });
-      if (m.opts.opening && !m.opts.training) startStandoff(m, true);
+      if (m.opts.mode === "duel" && m.opts.opening && !m.opts.training) startStandoff(m, [0, 1], true);
     }
     rememberInputs(m, inputs);
     return m.events;
@@ -1728,7 +2223,6 @@ export function stepMatch(m: Match, inputs: [InputFrame, InputFrame]): SimEvent[
     return m.events;
   }
 
-  const blank = blankInput();
   if (m.phase === "verdict") {
     stepVerdict(m, inputs);
     for (const f of m.fighters) {
@@ -1740,13 +2234,23 @@ export function stepMatch(m: Match, inputs: [InputFrame, InputFrame]): SimEvent[
     return m.events;
   }
 
-  const order = m.tick & 1 ? [0, 1] : [1, 0];
-  for (const i of order) {
-    const f = m.fighters[i];
-    const o = m.fighters[1 - i];
-    const inp = m.phase === "fight" ? inputs[i] : blank;
+  if (m.phase === "fight") retarget(m);
+  const n = m.fighters.length;
+  for (let k = 0; k < n; k++) {
+    // Who goes first alternates, so nobody wins every tie.
+    const f = m.fighters[m.tick & 1 ? k : n - 1 - k];
+    // A leader striding in to call the hero out is not theirs to move.
+    if (f.id === m.callout) continue;
+    const o = foe(m, f);
+    let inp = m.phase === "fight" ? (inputs[f.id] ?? BLANK) : BLANK;
+    // Rabble wait their turn: without one, a crew member cannot swing or shoot.
+    if (f.rank === "rabble" && f.turn <= 0) {
+      f.buf.strike = 0;
+      f.buf.shot = 0;
+      if (inp.shot || inp.strike) inp = { ...inp, shot: false, strike: false };
+    }
     // An awakened opponent slows this fighter: motion is scaled and logic skips ticks.
-    f.timeScale = o.awakened > 0 && f.awakened === 0 ? C.AWAKEN_SLOW : 1;
+    f.timeScale = slowed(m, f) ? C.AWAKEN_SLOW : 1;
     f.slowAcc += f.timeScale;
     if (f.slowAcc >= 0.999) {
       f.slowAcc -= 1;
@@ -1757,6 +2261,7 @@ export function stepMatch(m: Match, inputs: [InputFrame, InputFrame]): SimEvent[
 
   if (m.phase === "fight") {
     updateProjectiles(m);
+    if (m.phase === "fight" && !m.cine) updateTurrets(m);
     if (m.phase === "fight" && !m.cine) updateZones(m);
     if (m.phase === "fight" && !m.cine) resolveStrikes(m);
   }

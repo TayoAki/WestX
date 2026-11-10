@@ -3,11 +3,11 @@ import { Input } from "./input/input";
 import { CameraRig } from "./render/cameraRig";
 import { Fx } from "./render/fx";
 import { PropsView } from "./render/propsView";
-import { KIT_PALETTE, Rig } from "./render/rig";
+import { crewPalette, KIT_PALETTE, Rig } from "./render/rig";
 import { createStage, type Stage } from "./render/stage";
-import { AI, type Difficulty } from "./sim/ai";
+import { AI, Rabble, type Difficulty } from "./sim/ai";
 import type { KitId } from "./sim/kits";
-import { createMatch, stepMatch } from "./sim/match";
+import { createMatch, isUp, stepMatch } from "./sim/match";
 import { C, MOVES } from "./sim/moves";
 import type { InputFrame, Match, SimEvent } from "./sim/types";
 import { clone, type V3 } from "./sim/vec";
@@ -17,11 +17,16 @@ import { Hud } from "./ui/hud";
 // Ties the simulation to the screen. The sim advances in fixed 1/60 s ticks;
 // rendering runs at the display's rate and interpolates between ticks.
 
-export type Mode = "attract" | "duel" | "training";
+/**
+ * `duel` and `training` are the arena: one rival, one formal fight.
+ * `roam` is open country: gangs camped about, and a fight wherever you meet one.
+ * `attract` is the duel that plays behind the menu.
+ */
+export type Mode = "attract" | "duel" | "training" | "roam";
 
 export class Game {
   readonly stage: Stage;
-  rigs: [Rig, Rig];
+  rigs: Rig[] = [];
   readonly fx: Fx;
   readonly props: PropsView;
   readonly cam: CameraRig;
@@ -38,20 +43,20 @@ export class Game {
   /** Test hook: when set, replaces the player's input. */
   inputOverride: InputFrame | null = null;
 
-  private ais: [AI | null, AI | null] = [null, null];
+  /** One mind per fighter. The player's own is null. */
+  ais: (AI | Rabble | null)[] = [];
   private acc = 0;
   private timeScale = 1;
   private slowT = 0;
-  private prev: [V3, V3] = [{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }];
-  private slashDone = [false, false];
+  private prev: V3[] = [];
+  private slashDone: boolean[] = [];
   private stats = { bestCombo: 0, fightTicks: 0 };
 
   constructor(app: HTMLElement, canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(location.search);
     this.stage = createStage(canvas, params.has("lowres"));
     const scene = this.stage.scene;
-    this.rigs = [new Rig(scene, 0, KIT_PALETTE.hunter, "hunter"), new Rig(scene, 1, KIT_PALETTE.outlaw, "outlaw")];
-    this.fx = new Fx(scene, this.stage, this.rigs);
+    this.fx = new Fx(scene, this.stage);
     this.props = new PropsView(scene);
     this.cam = new CameraRig(this.stage.camera);
     this.input = new Input(canvas);
@@ -110,28 +115,40 @@ export class Game {
     const first: KitId = mode === "attract" ? pick(PLAYABLE) : this.kit;
     const others: KitId[] = [...PLAYABLE.filter((k) => k !== first), ...(mode === "attract" ? [] : (["outlaw"] as KitId[]))];
     const kits: [KitId, KitId] = [first, mode === "training" ? "outlaw" : pick(others)];
-    const m = createMatch(seed, { training: mode === "training", kits });
+    const m = createMatch(seed, { training: mode === "training", kits, mode: mode === "roam" ? "roam" : "duel" });
     this.match = m;
-    // New classes mean new bodies.
+
+    // A new cast means new bodies. A crew wears its leader's colours.
     for (const rig of this.rigs) rig.dispose();
     const scene = this.stage.scene;
-    this.rigs = [new Rig(scene, 0, KIT_PALETTE[kits[0]], kits[0]), new Rig(scene, 1, KIT_PALETTE[kits[1]], kits[1])];
-    this.fx.setRigs(this.rigs);
-    this.ais =
-      mode === "attract"
-        ? [AI.create(0, "normal", seed + 1), AI.create(1, "hard", seed + 2)]
-        : [null, AI.create(1, mode === "training" ? "dummy" : this.difficulty, seed + 2)];
+    this.rigs = m.fighters.map((f) => {
+      if (f.rank !== "rabble") return new Rig(scene, f.id, KIT_PALETTE[f.kit], f.kit);
+      const leader = m.fighters.find((g) => g.gang === f.gang && g.rank === "named");
+      return new Rig(scene, f.id, crewPalette(f.kit, KIT_PALETTE[leader ? leader.kit : "outlaw"]), f.kit, true);
+    });
+    this.fx.setRigs(
+      this.rigs,
+      m.fighters.filter((f) => f.rank !== "rabble").map((f) => f.id),
+    );
+    this.ais = m.fighters.map((f) => {
+      if (f.rank === "rabble") return new Rabble(f.id, seed + 7 * f.id);
+      if (f.id === 0) return mode === "attract" ? AI.create(0, "normal", seed + 1) : null;
+      return AI.create(f.id, mode === "attract" ? "hard" : mode === "training" ? "dummy" : this.difficulty, seed + 2 + f.id);
+    });
+    this.stage.setBounds(m.radius);
     this.props.build(m);
     this.fx.reset();
     this.fx.setPropKinds(m.props.map((p) => p.kind));
-    this.prev = [clone(m.fighters[0].pos), clone(m.fighters[1].pos)];
+    this.prev = m.fighters.map((f) => clone(f.pos));
+    this.slashDone = m.fighters.map(() => false);
     this.acc = 0;
     this.timeScale = 1;
     this.slowT = 0;
     this.paused = false;
     this.stats = { bestCombo: 0, fightTicks: 0 };
-    this.hud.reset(0, kits[0]);
-    this.hud.setNames(CLASSES[kits[0]].title, CLASSES[kits[1]].title, mode === "training" ? "training" : this.difficulty);
+    // Behind the menu the demo fight picks its own classes; the menu goes on describing yours.
+    this.hud.reset(0, mode === "attract" ? this.kit : kits[0]);
+    this.hud.setNames(CLASSES[kits[0]].title, mode === "training" ? "training" : mode === "roam" ? `open country · ${this.difficulty}` : this.difficulty);
     this.cam.mode = mode === "attract" ? "attract" : "duel";
     if (mode !== "attract") this.cam.establish();
     this.input.release();
@@ -195,29 +212,42 @@ export class Game {
       return;
     }
     this.input.enabled = false;
-    const alive = this.match.outcome === "alive";
+    const m = this.match;
+    const alive = m.outcome === "alive";
+    const leaders = m.fighters.filter((f) => f.rank === "named" && f.team !== m.fighters[0].team);
     this.hud.showResult({
-      won: this.match.winner === 0,
+      won: isUp(m.fighters[0]),
       alive,
-      bounty: alive ? C.BOUNTY_ALIVE : C.BOUNTY_DEAD,
+      bounty: m.bounty,
       seconds: this.stats.fightTicks / 60,
       bestCombo: this.stats.bestCombo,
+      roam:
+        this.mode === "roam"
+          ? { leaders: leaders.filter((f) => !isUp(f)).length, of: leaders.length, runDown: m.winner >= 0 && m.fighters[m.winner].rank === "rabble" }
+          : undefined,
     });
     this.hud.setScreen("result", true);
   }
 
   private step(): void {
     const m = this.match;
-    this.prev[0] = clone(m.fighters[0].pos);
-    this.prev[1] = clone(m.fighters[1].pos);
-    const in0 = this.ais[0] ? this.ais[0].think(m) : (this.inputOverride ?? this.input.read());
-    const in1 = this.ais[1]!.think(m);
+    const inputs: InputFrame[] = [];
+    for (const f of m.fighters) {
+      this.prev[f.id] = clone(f.pos);
+      const ai = this.ais[f.id];
+      if (ai) inputs[f.id] = ai.think(m);
+    }
+    if (!this.ais[0]) {
+      // With nobody to face, the player runs where the camera points.
+      const own = this.inputOverride ?? this.input.read();
+      inputs[0] = this.inputOverride ? own : { ...own, yaw: this.cam.heading };
+    }
     if (m.phase === "fight") this.stats.fightTicks++;
-    for (const e of stepMatch(m, [in0, in1])) this.handle(e);
+    for (const e of stepMatch(m, inputs)) this.handle(e);
 
     // Draw the sweep of each strike once, as it becomes active.
-    for (let i = 0; i < 2; i++) {
-      const f = m.fighters[i];
+    for (const f of m.fighters) {
+      const i = f.id;
       const mv = f.state === "attack" && f.move ? MOVES[f.move] : null;
       if (!mv || mv.hits.length === 0 || f.mf < mv.hits[0].from) {
         this.slashDone[i] = false;
@@ -252,7 +282,7 @@ export class Game {
     const alpha = this.paused ? 1 : Math.min(1, this.acc / C.DT);
     const sdt = this.paused ? 0 : dt * this.timeScale;
     const cur = this.match;
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < cur.fighters.length; i++) {
       const f = cur.fighters[i];
       const p = this.prev[i];
       // A jump of many metres in one tick is a teleport, not motion: do not smear it.
@@ -262,11 +292,10 @@ export class Game {
       const y = p.y + (f.pos.y - p.y) * a;
       const z = p.z + (f.pos.z - p.z) * a;
       this.rigs[i].update(f, cur, sdt, x, y, z);
-      this.stage.setShadow(i, x, y, z, f.state === "slip" ? 0 : 1);
     }
     this.fx.update(sdt, cur, alpha);
     this.cam.update(dt, cur, this.rigs, this.fx.shake, 0);
-    this.hud.update(cur, this.playing);
+    this.hud.update(cur, this.playing, this.cam.heading);
     if (this.playing) this.sfx.update(cur);
     this.stage.update(dt);
     this.stage.scene.render();

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AI } from "../src/sim/ai";
+import { AI, Rabble } from "../src/sim/ai";
 import { KITS } from "../src/sim/kits";
-import { createMatch, kitOf, stepMatch } from "../src/sim/match";
+import { createMatch, isUp, kitOf, stepMatch } from "../src/sim/match";
 import { BOLT_HIT, C, ZONES } from "../src/sim/moves";
-import { blankInput, STATUSES, type InputFrame, type Match, type MatchOptions, type SimEvent } from "../src/sim/types";
-import { dirOfYaw, distH, sub, v3 } from "../src/sim/vec";
+import { blankInput, STATUSES, type Fighter, type InputFrame, type Match, type MatchOptions, type SimEvent } from "../src/sim/types";
+import { dirOfYaw, distH, rightOf, sub, v3 } from "../src/sim/vec";
 
 type Partial1 = Partial<InputFrame>;
 type Script = Partial1 | ((t: number) => Partial1);
@@ -889,14 +889,46 @@ describe("the engineer", () => {
     expect(has(ev, "overload")).toBe(true);
   });
 
-  it("gasses the ground under the target, and the gas stays", () => {
+  it("sets a sentry down that picks its own target and poisons them", () => {
     const m = duel(14);
     m.fighters[0].meter = 60;
-    const ev = run(m, 12 + ZONES.gas.fuse + 60, (t) => ({ special: t < 2 }));
-    expect(ev.find((e) => e.type === "zoneSpawn")).toMatchObject({ kind: "gas" });
+    let ev = run(m, 20, (t) => ({ special: t < 2 }));
+    expect(ev.filter((e) => e.type === "turretUp").length).toBe(1);
+    expect(m.turrets.length).toBe(1);
+    expect(m.zones.length).toBe(0);
+    // It stands in front of her, between her and whoever she is facing.
+    expect(distH(m.turrets[0].pos, m.fighters[0].pos)).toBeCloseTo(C.TURRET_AHEAD, 3);
+    expect(m.turrets[0].pos.z).toBeGreaterThan(m.fighters[0].pos.z);
+    const hp = m.fighters[1].hp;
+    // She does nothing more. The machine does the shooting.
+    ev = run(m, 150);
+    expect(ev.filter((e) => e.type === "shot" && e.kind === "sentry").length).toBeGreaterThanOrEqual(4);
+    expect(hits(ev).every((e) => e.att === 0 && e.projectile)).toBe(true);
     expect(m.fighters[1].status.poison).toBeGreaterThan(0);
-    expect(m.zones.length).toBe(1);
-    expect(m.fighters[0].meter).toBe(60 - C.LARIAT_COST + (m.fighters[0].meter - (60 - C.LARIAT_COST)));
+    expect(m.fighters[1].hp).toBeLessThan(hp);
+    expect(m.fighters[0].ammo).toBe(C.AMMO);
+  });
+
+  it("has one sentry at a time, and it runs down", () => {
+    const m = duel(40);
+    m.fighters[0].meter = 100;
+    run(m, 40, (t) => ({ special: t < 2 }));
+    const first = m.turrets[0].id;
+    let ev = run(m, 40, (t) => ({ special: t < 2, mx: 1 }));
+    expect(m.turrets.length).toBe(1);
+    expect(m.turrets[0].id).not.toBe(first);
+    expect(ev.find((e) => e.type === "turretDown")).toMatchObject({ id: first });
+    ev = run(m, C.TURRET_LIFE);
+    expect(m.turrets.length).toBe(0);
+    expect(ev.filter((e) => e.type === "turretDown").length).toBe(1);
+  });
+
+  it("throws tesla that has nobody to jump to in a duel", () => {
+    const m = duel(12);
+    run(m, C.QUICK_MIN + 2, { steady: true });
+    const ev = run(m, 30, (t) => ({ steady: true, shot: t < 2 }));
+    expect(hits(ev).length).toBe(1);
+    expect(has(ev, "arc")).toBe(false);
   });
 
   it("shocks an attacker who is caught mid-combo", () => {
@@ -1059,4 +1091,496 @@ describe("AI versus AI", () => {
     ];
     for (const type of expected) expect(seenAll.has(type), `expected the AI to produce "${type}"`).toBe(true);
   });
+});
+
+// ------------------------------------------------------------------ open country
+
+/** The overworld past its intro: one gang unless told otherwise, and no scenery in the way. */
+function roam(opts: Partial<MatchOptions> = {}): Match {
+  const m = createMatch(11, { mode: "roam", kits: ["hunter", "outlaw"], gangs: 1, ...opts });
+  m.props = [];
+  run(m, C.INTRO_T);
+  expect(m.phase).toBe("fight");
+  return m;
+}
+const crewOf = (m: Match, gang = 0): Fighter[] => m.fighters.filter((f) => f.gang === gang && f.rank === "rabble");
+const leaderOf = (m: Match, gang = 0): Fighter => m.fighters.find((f) => f.gang === gang && f.rank === "named")!;
+const events = <T extends SimEvent["type"]>(ev: SimEvent[], type: T) => ev.filter((e) => e.type === type) as Extract<SimEvent, { type: T }>[];
+
+/** Stands the hero at the origin facing +z, and lines fighters up in front of them at the given distances. */
+function lineUp(m: Match, who: Fighter[], at: number[], side: number[] = []): void {
+  const h = m.fighters[0];
+  h.pos = v3();
+  h.yaw = 0;
+  who.forEach((f, i) => {
+    f.pos = v3(side[i] ?? 0, 0, at[i]);
+    f.yaw = Math.PI;
+    f.awake = true;
+  });
+  // Everyone else is somewhere it cannot matter.
+  let far = 0;
+  for (const f of m.fighters) if (f.id !== 0 && !who.includes(f)) f.pos = v3(60 + 3 * far++, 0, -60);
+}
+
+describe("the overworld", () => {
+  it("starts with one hero in open country and three gangs asleep at their camps", () => {
+    const m = createMatch(3, { mode: "roam", kits: ["witch", "outlaw"] });
+    expect(m.radius).toBe(C.FIELD_R);
+    const hero = m.fighters[0];
+    expect(hero).toMatchObject({ rank: "hero", kit: "witch", team: 0, target: -1, awake: true });
+    expect(m.fighters.filter((f) => f.rank === "hero").length).toBe(1);
+    const leaders = m.fighters.filter((f) => f.rank === "named");
+    expect(leaders.length).toBe(3);
+    // Nobody leads a gang with the hero's own class.
+    expect(leaders.map((f) => f.kit)).not.toContain("witch");
+    for (const l of leaders) {
+      expect(Math.hypot(l.pos.x, l.pos.z)).toBeCloseTo(C.CAMP_R, 3);
+      const crew = crewOf(m, l.gang);
+      expect(crew.length).toBeGreaterThanOrEqual(4);
+      expect(crew.some((f) => f.kit === "gunhand")).toBe(true);
+      for (const f of [l, ...crew]) {
+        expect(f.awake).toBe(false);
+        expect(f.team).toBe(1);
+        expect(distH(f.pos, l.pos)).toBeLessThan(11);
+      }
+    }
+    m.fighters.forEach((f, i) => expect(f.id).toBe(i));
+  });
+
+  it("is the arena, unchanged, when no mode is asked for", () => {
+    const m = createMatch(3);
+    expect(m.opts.mode).toBe("duel");
+    expect(m.radius).toBe(C.ARENA_R);
+    expect(m.fighters.map((f) => [f.rank, f.team, f.target])).toEqual([
+      ["hero", 0, 1],
+      ["named", 1, 0],
+    ]);
+  });
+
+  it("lets the hero run where the camera points and face the way they go, with nobody to fight", () => {
+    const m = roam();
+    const h = m.fighters[0];
+    run(m, 60, { my: 1, yaw: Math.PI / 2 });
+    expect(h.pos.x).toBeCloseTo(HUNTER.run, 0);
+    expect(Math.abs(h.pos.z)).toBeLessThan(0.01);
+    expect(h.yaw).toBeCloseTo(Math.PI / 2, 5);
+    // Right of a camera looking down +z is +x.
+    const x = h.pos.x;
+    run(m, 30, { mx: 1, yaw: 0 });
+    expect(h.pos.x).toBeGreaterThan(x + 3);
+    expect(h.target).toBe(-1);
+  });
+
+  it("turns the dash into a way to cover ground when there is nobody to chase", () => {
+    const m = roam();
+    const h = m.fighters[0];
+    run(m, 40, (t) => ({ dash: t < 2, my: 1, yaw: Math.PI }));
+    expect(h.dashes).toBe(HUNTER.dashes - 1);
+    expect(h.pos.z).toBeLessThan(-15);
+    expect(h.state).toBe("free");
+  });
+
+  it("leaves a camp asleep while the hero keeps their distance, and wakes its crew when they come close", () => {
+    const m = roam();
+    const h = m.fighters[0];
+    const crew = crewOf(m);
+    const first = crew[0];
+    const d = dirOfYaw(first.yaw);
+    h.pos = v3(first.pos.x + d.x * (C.ALERT_R + 6), 0, first.pos.z + d.z * (C.ALERT_R + 6));
+    let ev = run(m, 30);
+    expect(has(ev, "alert")).toBe(false);
+    expect(crew.every((f) => !f.awake)).toBe(true);
+    expect(h.target).toBe(-1);
+
+    h.pos = v3(first.pos.x + d.x * (C.ALERT_R - 6), 0, first.pos.z + d.z * (C.ALERT_R - 6));
+    ev = run(m, 3);
+    expect(events(ev, "alert").length).toBe(1);
+    expect(crew.every((f) => f.awake)).toBe(true);
+    // The leader lets the crew handle it.
+    expect(leaderOf(m).awake).toBe(false);
+    // The hero is now facing the nearest of them, without having asked.
+    const nearest = [...crew].sort((a, b) => distH(h.pos, a.pos) - distH(h.pos, b.pos))[0];
+    expect(h.target).toBe(nearest.id);
+    expect(crew.every((f) => f.target === 0)).toBe(true);
+  });
+
+  it("lets the hero pick out a sleeping camp from range, and move on to the next of them", () => {
+    const m = roam();
+    const h = m.fighters[0];
+    const crew = crewOf(m);
+    lineUp(m, crew.slice(0, 2), [22, 24], [0, 4]);
+    for (const f of crew) f.awake = false;
+    run(m, 4);
+    expect(h.target).toBe(-1);
+    run(m, 4, (t) => ({ swap: t < 2 }));
+    expect(h.target).toBe(crew[0].id);
+    expect(crew[0].awake).toBe(false);
+    run(m, 4, (t) => ({ swap: t < 2 }));
+    expect(h.target).toBe(crew[1].id);
+    // The first shot is the hero's, and it wakes the lot.
+    const ev = run(m, 40, (t) => ({ shot: t < 2 }));
+    expect(hits(ev)[0]).toMatchObject({ att: 0, def: crew[1].id, projectile: true });
+    expect(crew.every((f) => f.awake)).toBe(true);
+  });
+
+  it("lets a crew go when the hero leaves their camp far behind", () => {
+    const m = roam();
+    const h = m.fighters[0];
+    const crew = crewOf(m);
+    for (const f of crew) f.awake = true;
+    run(m, 2);
+    expect(crew[0].target).toBe(0);
+    const home = leaderOf(m).home;
+    h.pos = v3(-home.x * 0.5, 0, -home.z * 0.5);
+    run(m, 2);
+    expect(crew.every((f) => !f.awake && f.target === -1)).toBe(true);
+    expect(h.target).toBe(-1);
+  });
+});
+
+describe("a crowd fight", () => {
+  it("lets one swing hit everyone in reach", () => {
+    const m = roam();
+    const crew = crewOf(m).filter((f) => f.kit === "thug");
+    lineUp(m, crew.slice(0, 3), [1.6, 1.7, 1.7], [0, 1.1, -1.1]);
+    const ev = run(m, 12, (t) => ({ strike: t < 2 }));
+    const struck = hits(ev).map((e) => e.def).sort();
+    expect(struck).toEqual(crew.slice(0, 3).map((f) => f.id).sort());
+    // One swing, three hits: the count runs up the way it does in a brawl.
+    expect(m.fighters[0].combo.hits).toBe(3);
+  });
+
+  it("does not let a swing through a crowd hit softer with each body", () => {
+    const m = roam();
+    const crew = crewOf(m).filter((f) => f.kit === "thug");
+    lineUp(m, crew.slice(0, 3), [1.6, 1.7, 1.7], [0, 1.1, -1.1]);
+    const dealt = hits(run(m, 12, (t) => ({ strike: t < 2 }))).map((e) => e.damage);
+    expect(new Set(dealt).size).toBe(1);
+  });
+
+  it("makes rabble take turns: nobody swings without one, only a few have one, and everyone gets one", () => {
+    const m = roam({ gangs: 3 });
+    const crew = crewOf(m, 2);
+    expect(crew.length).toBe(6);
+    lineUp(m, crew, [2, 2, 2, 2, 2, 2], [0, 1.2, -1.2, 2.4, -2.4, 3.6]);
+    const before = new Map(crew.map((f) => [f.id, f.state]));
+    const had = new Set<number>();
+    const hp = m.fighters[0].hp;
+    for (let t = 0; t < 1200; t++) {
+      const inputs: InputFrame[] = [];
+      inputs[0] = blankInput();
+      for (const f of crew) inputs[f.id] = frame({ strike: t % 6 < 2, my: 0.2 }, t);
+      stepMatch(m, inputs);
+      expect(crew.filter((f) => f.turn > 0).length).toBeLessThanOrEqual(C.RABBLE_TURNS);
+      for (const f of crew) {
+        if (f.turn > 0) had.add(f.id);
+        if (f.state === "attack" && before.get(f.id) !== "attack") expect(f.turn, `fighter ${f.id} swung out of turn`).toBeGreaterThan(0);
+        before.set(f.id, f.state);
+      }
+    }
+    expect(had.size).toBe(crew.length);
+    // They do connect, and it is nothing like six at once.
+    expect(m.fighters[0].hp).toBeLessThan(hp);
+    expect(m.fighters[0].hp).toBeGreaterThan(0);
+  });
+
+  it("sends a hurt one flying further than a fresh one, off the same hit", () => {
+    const flown = (hp: number): number => {
+      const m = roam();
+      const thug = crewOf(m).find((f) => f.kit === "thug")!;
+      lineUp(m, [thug], [1.6]);
+      thug.hp = hp;
+      const start = { ...thug.pos };
+      const ev = run(m, 60, (t) => ({ strike: t < 2 }));
+      expect(hits(ev).length).toBe(1);
+      expect(isUp(thug)).toBe(true);
+      return distH(thug.pos, start);
+    };
+    const fresh = flown(KITS.thug.hp);
+    const hurt = flown(KITS.thug.hp * 0.55);
+    expect(hurt).toBeGreaterThan(fresh * 2);
+  });
+
+  it("throws a finished one clean out of the fight, with no verdict", () => {
+    const m = roam();
+    const thug = crewOf(m).find((f) => f.kit === "thug")!;
+    lineUp(m, [thug], [1.6]);
+    thug.hp = 10;
+    const start = { ...thug.pos };
+    const ev = run(m, 90, (t) => ({ strike: t < 2 }));
+    expect(events(ev, "down")).toEqual([expect.objectContaining({ id: thug.id, by: 0 })]);
+    expect(has(ev, "verdictStart")).toBe(false);
+    expect(thug.state).toBe("ko");
+    expect(isUp(thug)).toBe(false);
+    expect(m.phase).toBe("fight");
+    expect(distH(thug.pos, start)).toBeGreaterThan(12);
+    // And the hero is no longer facing someone who is not there.
+    expect(m.fighters[0].target).not.toBe(thug.id);
+  });
+
+  it("bowls a flying body through its own side", () => {
+    const m = roam();
+    const [a, b] = crewOf(m).filter((f) => f.kit === "thug");
+    lineUp(m, [a, b], [1.6, 4.2]);
+    a.hp = 10;
+    const ev = run(m, 40, (t) => ({ strike: t < 2 }));
+    expect(a.state).toBe("ko");
+    // The swing never reached the second one. The first one did.
+    expect(hits(ev).map((e) => e.def)).toEqual([a.id, b.id]);
+    expect(b.hp).toBe(KITS.thug.hp - C.BOWL_DMG);
+    expect(b.hitsTaken).toBe(1);
+  });
+
+  it("burns the crowd around an overload", () => {
+    const m = roam({ kits: ["engineer", "outlaw"] });
+    const [x, y, z] = crewOf(m).filter((f) => f.kit === "thug");
+    lineUp(m, [x, y, z], [8, 10, 10], [0, 2, -2]);
+    x.status.shock = 200;
+    // One rivet: its poison meets the shock.
+    const ev = run(m, 30, (t) => ({ shot: t < 2 }));
+    expect(events(ev, "overload")).toEqual([expect.objectContaining({ id: x.id })]);
+    for (const f of [y, z]) expect(f.hp).toBe(KITS.thug.hp - C.OVERLOAD_DMG * C.OVERLOAD_SPLASH);
+  });
+
+  it("makes the engineer's tesla jump from body to body, and no further than it can reach", () => {
+    const m = roam({ kits: ["engineer", "outlaw"], gangs: 3 });
+    const [x, y, z, far] = crewOf(m, 2).filter((f) => f.kit === "thug");
+    lineUp(m, [x, y, z, far], [8, 10, 12, 30], [0, 3, -3, 0]);
+    run(m, C.QUICK_MIN + 2, { steady: true });
+    const ev = run(m, 40, (t) => ({ steady: true, shot: t < 2 }));
+    expect(events(ev, "arc").length).toBe(2);
+    expect(hits(ev).map((e) => e.def)).toEqual([x.id, y.id, z.id]);
+    for (const f of [x, y, z]) expect(f.status.shock).toBeGreaterThan(0);
+    // Each jump carries less than the shot that started it.
+    expect(hits(ev)[1].damage).toBeCloseTo(hits(ev)[0].damage * C.CHAIN_DMG, 5);
+    expect(far.hp).toBe(far.maxHp);
+    expect(far.status.shock).toBe(0);
+  });
+
+  it("lets a sentry pick off whoever in the crowd is nearest to it", () => {
+    const m = roam({ kits: ["engineer", "outlaw"] });
+    const [x, y] = crewOf(m).filter((f) => f.kit === "thug");
+    lineUp(m, [x, y], [15, 9], [6, -5]);
+    m.fighters[0].meter = 60;
+    const ev = run(m, 20 + C.TURRET_GAP * 3, (t) => ({ special: t < 2 }));
+    expect(m.turrets.length).toBe(1);
+    const shot = hits(ev).filter((e) => e.projectile);
+    expect(shot.length).toBeGreaterThan(0);
+    expect(shot.every((e) => e.def === y.id)).toBe(true);
+    expect(y.status.poison).toBeGreaterThan(0);
+  });
+
+  it("catches everyone standing in a circle", () => {
+    const m = roam({ kits: ["witch", "outlaw"] });
+    const [x, y, z] = crewOf(m).filter((f) => f.kit === "thug");
+    lineUp(m, [x, y, z], [9, 10.5, 10.5], [0, 1.5, -1.5]);
+    m.fighters[0].meter = 60;
+    const ev = run(m, C.FAN_HOLD + 80, { shot: true });
+    expect(has(ev, "zoneErupt")).toBe(true);
+    for (const f of [x, y, z]) {
+      expect(f.hp).toBeLessThan(KITS.thug.hp);
+      expect(f.hitsTaken).toBeGreaterThan(0);
+    }
+  });
+
+  it("sends a quickdraw clean through a line of rabble", () => {
+    const m = roam();
+    const [x, y, z] = crewOf(m).filter((f) => f.kit === "thug");
+    lineUp(m, [x, y, z], [7, 10, 13]);
+    run(m, C.QUICK_MIN + 2, { steady: true });
+    const ev = run(m, 40, (t) => ({ steady: true, shot: t < 2 }));
+    expect(hits(ev).filter((e) => e.projectile).map((e) => e.def)).toEqual([x.id, y.id, z.id]);
+  });
+
+  it("stops an ordinary bullet in the first body it meets", () => {
+    const m = roam();
+    const [x, y] = crewOf(m).filter((f) => f.kit === "thug");
+    lineUp(m, [x, y], [7, 10]);
+    const ev = run(m, 40, (t) => ({ shot: t < 2 }));
+    expect(hits(ev).map((e) => e.def)).toEqual([x.id]);
+  });
+
+  it("does not stop the Last Word for rabble, but stops it for their leader", () => {
+    const m = roam();
+    const thug = crewOf(m).find((f) => f.kit === "thug")!;
+    const boss = leaderOf(m);
+    lineUp(m, [thug, boss], [6, 14]);
+    m.fighters[0].meter = C.METER;
+    const ev = run(m, 60, (t) => ({ ult: t < 2 }));
+    expect(hits(ev).map((e) => e.def)).toEqual([thug.id]);
+    expect(events(ev, "cineStart")).toEqual([expect.objectContaining({ att: 0, def: boss.id })]);
+  });
+
+  it("lets a gunhand's bullet be sent back off the brace", () => {
+    const m = roam();
+    const gun = crewOf(m).find((f) => f.kit === "gunhand")!;
+    lineUp(m, [gun], [9]);
+    gun.turn = 100;
+    const ev: SimEvent[] = [];
+    let raise = -1;
+    for (let t = 0; t < 80 && !has(ev, "down") && gun.hp === gun.maxHp; t++) {
+      const bullet = m.projectiles.find((p) => p.owner === gun.id);
+      if (bullet && raise < 0 && distH(bullet.pos, m.fighters[0].pos) < 3.2) raise = t;
+      const inputs: InputFrame[] = [frame({ guard: raise >= 0 }, t)];
+      inputs[gun.id] = frame({ shot: t < 2 }, t);
+      ev.push(...stepMatch(m, inputs));
+    }
+    expect(events(ev, "deflect").some((e) => e.back)).toBe(true);
+    expect(gun.hp).toBeLessThan(gun.maxHp);
+  });
+});
+
+describe("a gang and its leader", () => {
+  /** Puts a whole crew in front of the hero on its last legs. One swing finishes them. */
+  const beatCrew = (m: Match, gang = 0): SimEvent[] => {
+    const crew = crewOf(m, gang);
+    lineUp(m, crew, crew.map(() => 1.7), crew.map((_, i) => (i - (crew.length - 1) / 2) * 0.9));
+    const boss = leaderOf(m, gang);
+    boss.pos = v3(0, 0, 30);
+    for (const f of crew) f.hp = 5;
+    return run(m, 10, (t) => ({ strike: t < 2 }));
+  };
+
+  it("calls the hero out to a standoff once the crew is beaten and the leader has not been touched", () => {
+    const m = roam();
+    const boss = leaderOf(m);
+    let ev = beatCrew(m);
+    expect(events(ev, "down").length).toBe(crewOf(m).length);
+    expect(events(ev, "callOut")).toEqual([expect.objectContaining({ id: boss.id })]);
+    ev = [];
+    for (let t = 0; t < 200 && !m.standoff; t++) ev.push(...run(m, 1));
+    expect(events(ev, "standoffStart")).toEqual([expect.objectContaining({ opening: true })]);
+    expect(m.standoff!.ids).toEqual([0, boss.id]);
+    expect(distH(boss.pos, m.fighters[0].pos)).toBeLessThanOrEqual(C.CALLOUT_GAP + 0.01);
+    expect(boss.awake).toBe(true);
+    expect(m.fighters[0].target).toBe(boss.id);
+    expect(boss.target).toBe(0);
+
+    // The hero wins the draw. It wounds the leader; it does not end them. Then it is a duel.
+    const bell = m.standoff!.bellAt - m.standoff!.t;
+    run(m, bell + 6);
+    ev = run(m, 4, (t) => ({ shot: t < 2 }));
+    expect(events(ev, "standoffEnd")).toEqual([expect.objectContaining({ winner: 0 })]);
+    expect(boss.hp).toBe(boss.maxHp - C.STANDOFF_DMG);
+    expect(m.phase).toBe("fight");
+    expect(m.standoff).toBeNull();
+  });
+
+  it("brings the leader into the fight without ceremony if the hero goes for them first", () => {
+    const m = roam();
+    const boss = leaderOf(m);
+    const crew = crewOf(m);
+    const d = dirOfYaw(boss.yaw);
+    const h = m.fighters[0];
+    h.pos = v3(boss.pos.x - d.x * 1.6, 0, boss.pos.z - d.z * 1.6);
+    h.yaw = boss.yaw;
+    for (const f of crew) f.pos = v3(boss.pos.x + rightOf(d).x * 30, 0, boss.pos.z + rightOf(d).z * 30);
+    const ev = run(m, 14, (t) => ({ strike: t < 2 }));
+    expect(hits(ev)[0]).toMatchObject({ att: 0, def: boss.id });
+    expect(boss.awake).toBe(true);
+    expect(crew.every((f) => f.awake)).toBe(true);
+    run(m, 2);
+    expect(boss.target).toBe(0);
+    expect(has(run(m, 200), "callOut")).toBe(false);
+  });
+
+  it("pays for a leader brought in, makes their crew give up, and lets the day go on", () => {
+    const m = roam({ gangs: 2 });
+    const h = m.fighters[0];
+    const [first, second] = [leaderOf(m, 0), leaderOf(m, 1)];
+    const finish = (boss: Fighter, how: "shot" | "special"): SimEvent[] => {
+      lineUp(m, [boss], [1.6]);
+      boss.hp = 5;
+      const ev = run(m, 14, (t) => ({ strike: t < 2 }));
+      expect(m.phase).toBe("verdict");
+      expect(m.verdict).toMatchObject({ winner: 0, loser: boss.id });
+      while (m.verdict!.t <= C.VERDICT_GRACE) ev.push(...run(m, 1));
+      ev.push(...run(m, 60, (t) => ({ [how]: t < 2 })));
+      return ev;
+    };
+
+    let ev = finish(first, "special");
+    // The crew were never touched. They have seen enough.
+    expect(events(ev, "down").map((e) => e.id).sort()).toEqual(crewOf(m, 0).map((f) => f.id).sort());
+    expect(crewOf(m, 0).every((f) => f.state === "downed" && !isUp(f))).toBe(true);
+    expect(events(ev, "ko")).toEqual([expect.objectContaining({ winner: 0, loser: first.id, alive: true, bounty: C.BOUNTY_ALIVE })]);
+    expect(first.state).toBe("tied");
+    expect(m.bounty).toBe(C.BOUNTY_ALIVE);
+    expect(m.phase).toBe("fight");
+    expect(h.target).not.toBe(first.id);
+    // The other gang is where it was.
+    expect(crewOf(m, 1).every((f) => isUp(f) && !f.awake)).toBe(true);
+
+    ev = finish(second, "shot");
+    expect(events(ev, "ko")).toEqual([expect.objectContaining({ loser: second.id, alive: false, bounty: C.BOUNTY_DEAD })]);
+    expect(m.bounty).toBe(C.BOUNTY_ALIVE + C.BOUNTY_DEAD);
+    expect(m.phase).toBe("ko");
+    run(m, C.KO_T + 2);
+    expect(m.phase).toBe("done");
+    expect(isUp(h)).toBe(true);
+  });
+
+  it("gives a hero run down by a crew no verdict at all", () => {
+    const m = roam();
+    const thug = crewOf(m).find((f) => f.kit === "thug")!;
+    lineUp(m, [thug], [1.8]);
+    m.fighters[0].hp = 5;
+    const ev: SimEvent[] = [];
+    for (let t = 0; t < 120 && m.phase === "fight"; t++) {
+      const inputs: InputFrame[] = [blankInput()];
+      inputs[thug.id] = frame({ strike: t % 6 < 2 }, t);
+      ev.push(...stepMatch(m, inputs));
+    }
+    expect(has(ev, "verdictStart")).toBe(false);
+    expect(events(ev, "ko")).toEqual([expect.objectContaining({ winner: thug.id, loser: 0, alive: false, bounty: 0 })]);
+    expect(m.phase).toBe("ko");
+    expect(m.fighters[0].state).toBe("ko");
+  });
+});
+
+describe("AI in open country", () => {
+  const play = (kit: "hunter" | "witch" | "engineer", seed: number, level: "normal" | "hard" = "normal") => {
+    const m = createMatch(seed, { mode: "roam", kits: [kit, "outlaw"] });
+    const minds = m.fighters.map((f) => (f.rank === "rabble" ? new Rabble(f.id, seed * 7 + f.id) : AI.create(f.id, f.rank === "hero" ? "hard" : level, seed * 31 + f.id)));
+    const seen = new Set<string>();
+    while (m.phase !== "done" && m.tick < 60 * 60 * 12) {
+      for (const e of stepMatch(m, minds.map((ai) => ai.think(m)))) seen.add(e.type);
+      for (const f of m.fighters) {
+        if (![f.pos.x, f.pos.y, f.pos.z, f.vel.x, f.vel.y, f.vel.z, f.hp, f.meter].every(Number.isFinite)) throw new Error(`non-finite state at tick ${m.tick} in ${f.name} (${f.state})`);
+        if (f.hp < 0 || f.hp > f.maxHp) throw new Error(`hp out of range at tick ${m.tick}: ${f.hp}`);
+        if (Math.hypot(f.pos.x, f.pos.z) > m.radius + 1e-3 || f.pos.y < 0 || f.pos.y > 80) throw new Error(`left the field at tick ${m.tick}`);
+        if (f.target >= 0 && m.fighters[f.target].team === f.team) throw new Error(`facing their own side at tick ${m.tick}`);
+      }
+      if (m.fighters.filter((f) => f.rank === "rabble" && f.turn > 0).length > C.RABBLE_TURNS * 3) throw new Error("too many rabble with a turn");
+    }
+    return { m, seen };
+  };
+
+  it("plays the whole field through with every class, and breaks nothing", () => {
+    const all = new Set<string>();
+    const tally: string[] = [];
+    for (const kit of ["hunter", "witch", "engineer"] as const) {
+      for (const seed of [2, 5, 9]) {
+        const { m, seen } = play(kit, seed);
+        for (const t of seen) all.add(t);
+        expect(m.phase, `${kit} seed ${seed} did not finish`).toBe("done");
+        const hero = m.fighters[0];
+        const leaders = m.fighters.filter((f) => f.rank === "named");
+        // It ends one of two ways: the hero is down, or every leader is.
+        expect(isUp(hero) ? leaders.every((f) => !isUp(f)) : true).toBe(true);
+        const down = m.fighters.filter((f) => f.rank === "rabble" && !isUp(f)).length;
+        tally.push(`${kit}#${seed}: ${isUp(hero) ? "cleared" : `lost to ${m.fighters[m.winner].name}`} in ${Math.round(m.tick / 60)}s, ${leaders.filter((f) => !isUp(f)).length}/3 leaders, ${down} rabble, $${m.bounty}`);
+      }
+    }
+    console.log(`open country, AI hero:\n  ${tally.join("\n  ")}`);
+    for (const type of ["alert", "down", "callOut", "standoffStart", "verdictStart", "ko", "hit", "turretUp"]) expect(all.has(type), `expected "${type}"`).toBe(true);
+  }, 120_000);
+
+  it("is deterministic for a given seed", () => {
+    const a = play("hunter", 4).m;
+    const b = play("hunter", 4).m;
+    expect(a.tick).toBe(b.tick);
+    expect(a.bounty).toBe(b.bounty);
+    expect(a.fighters.map((f) => [f.hp, f.state])).toEqual(b.fighters.map((f) => [f.hp, f.state]));
+  }, 60_000);
 });

@@ -22,7 +22,7 @@ Each phase ends at a gate. If the gate fails, fix it before moving on.
 |---|---|---|---|---|
 | 0 | **Setup** | Done | Project, build, tests | You can press Play |
 | 1 | **Duel Box** | First playable built; waiting on a playtest | One arena, the hunter's full kit, a rival that fights back | The fight is fun for ten minutes with placeholder art |
-| 2 | **The Posse** | Started: all three classes are playable in duels | Group fights, swapping between the three, a Titan prototype | Three classes feel different, and they are stronger together |
+| 2 | **The Posse** | Started: three classes, group fights and one open field are in. Swapping is not | Group fights, swapping between the three, a Titan prototype | Three classes feel different, and they are stronger together |
 | 3 | **Vertical slice** | Not started | Gallows Reach: 1–2 km², one town, the bounty loop, horses, real character art | 30–45 minutes someone else can play and wants more of |
 | 4 | **Production** | Not started | Second region, story, bounty roster, progression, music | Content-complete for early access |
 | 5 | **Online** | Not started | Posse co-op, then Showdown duels | Stable three-player sessions |
@@ -35,8 +35,13 @@ isn't fun here, nothing built on top will save it.
 ### Phase 1: what exists
 
 - Three playable classes: the lawman, the witch and the engineer, plus a quick outlaw as a rival
+- Open country: one field, three gangs camped in it, and a fight wherever you meet one
+- Crowd fights: one swing hits everyone in reach, rabble fly further the more they are hurt, and they take turns
+- Gang leaders who call the hero out to a standoff and a duel once their crew is beaten
+- A follow camera and a compass that points at the nearest gang
 - Area attacks: zones that mark the ground, go off after a warning, and can linger
-- Three conditions, each with a job: poison, shock and hex. Two on one fighter overload
+- The engineer's sentry, and tesla that jumps from body to body
+- Three conditions, each with a job: poison, shock and hex. Two on one fighter overload, and the burst catches the crowd
 - The hunter's brace: walk behind it, deflect and return shots, catch a blow mid-combo, and discharge it as a blast or a guard-breaking thunderclap
 - Short, heavy strike strings ending in a blast, a launch or a slam
 - A six-round cylinder, a timed reload with a perfect window, and fanning the hammer
@@ -55,11 +60,14 @@ isn't fun here, nothing built on top will save it.
 ### Phase 1: what is missing or unproven
 
 - The art is placeholder and the animation is generated from key poses.
-- Every fight is one-on-one. The witch's circles and the engineer's gas are built for
-  crowds and have only ever had one target. Group fights are the next thing to build.
+- Group fights have only been played by the AI. Whether a crowd is fun, fair and
+  readable for a person is the main thing to find out.
+- The open field is flat desert with props. There is no town, no terrain and nothing
+  to do between camps but walk.
 - The three classes never share a fight, so one class cannot yet set up another.
-- Balance is rough. With the AI playing every class against every other, the engineer
-  wins most, then the lawman, then the witch.
+- Balance is rough. With the AI playing every class against every other in the arena,
+  the lawman wins 18 of 32, the engineer 16 and the witch 14. In open country an AI
+  hero clears the field in 5 runs of 9, and every loss is to a leader, not to a crew.
 - The witch and engineer reuse the lawman's awakening and ultimate under their own names.
 - The arena is open desert. A town street, powder barrels, dynamite and the horse
   are the next western pieces.
@@ -92,7 +100,8 @@ isn't fun here, nothing built on top will save it.
 
 | # | Question | Why it matters |
 |---|---|---|
-| 1 | Do the three classes feel different from each other? Which is the most fun, and which the least? | This is the Phase 2 gate |
+| 1 | Do the three classes feel different from each other now, the engineer and the witch above all? Which is the most fun, and which the least? | This is the Phase 2 gate |
+| 1b | In open country, is a crowd fun to fight, or a chore? Are two attackers at once too many, too few? | Crowd rules are tuned by the AI so far, not by a person |
 | 2 | What device did you play on, and did it run smoothly? | I cannot measure frame rate here |
 | 3 | More flight, or keep it grounded with air combos? | Sets how close this plays to each of your two references |
 | 4 | Three fixed heroes, or a create-your-own character per class? | Changes how Phase 2 is built |

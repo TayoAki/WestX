@@ -1,8 +1,9 @@
 import type { Input } from "../input/input";
 import type { Difficulty } from "../sim/ai";
 import { KITS, type KitId } from "../sim/kits";
+import { isUp, targetOf } from "../sim/match";
 import { C } from "../sim/moves";
-import { STATUSES, type Button, type Match, type SimEvent } from "../sim/types";
+import { STATUSES, type Button, type Fighter, type Match, type SimEvent } from "../sim/types";
 import { CLASSES, PLAYABLE } from "./classes";
 import "./hud.css";
 
@@ -17,12 +18,17 @@ export interface ResultStats {
   bounty: number;
   seconds: number;
   bestCombo: number;
+  /** Open country: how many leaders were brought in, out of how many, and whether a crew ran the hero down. */
+  roam?: { leaders: number; of: number; runDown: boolean };
 }
 
+/** What can be started from the menu. */
+export type StartMode = "duel" | "training" | "roam";
+
 /** Controls every class shares, shown under each class's own list. */
-const SHARED_MOVES = `<li><kbd>W A S D</kbd> Move. W closes in, A and D circle</li><li><kbd>Space</kbd> Jump <kbd>R</kbd> Ultimate <kbd>F</kbd> Awaken</li>`;
-const SHARED_NOTES = `<p class="fine"><b>The standoff.</b> Every duel opens with one. Wait for the bell, then shoot first.</p>`;
-const SHARED_LEGEND = `<span><kbd>Space</kbd>jump</span><span><kbd>R</kbd>ultimate</span><span><kbd>F</kbd>awaken</span><span><kbd>H</kbd>hide</span>`;
+const SHARED_MOVES = `<li><kbd>W A S D</kbd> Move. Facing someone, W closes in and A and D circle. Facing nobody, you run where you point</li><li><kbd>Space</kbd> Jump <kbd>R</kbd> Ultimate <kbd>F</kbd> Awaken <kbd>T</kbd> Next target</li>`;
+const SHARED_NOTES = `<p class="fine"><b>Open country.</b> Walk into a camp and the fight starts where you stand. The crew come a few at a time, and fly further the more you hurt them. Beat them and their leader calls you out.</p><p class="fine"><b>The standoff.</b> Every duel opens with one. Wait for the bell, then shoot first.</p>`;
+const SHARED_LEGEND = `<span><kbd>Space</kbd>jump</span><span><kbd>R</kbd>ultimate</span><span><kbd>F</kbd>awaken</span><span><kbd>T</kbd>target</span><span><kbd>H</kbd>hide</span>`;
 
 const money = (n: number): string => `$${n.toLocaleString("en-US")}`;
 
@@ -46,7 +52,7 @@ interface SideEls {
 }
 
 export class Hud {
-  onStart: (mode: "duel" | "training", difficulty: Difficulty, kit: KitId) => void = () => {};
+  onStart: (mode: StartMode, difficulty: Difficulty, kit: KitId) => void = () => {};
   onResume: () => void = () => {};
   onRematch: () => void = () => {};
   onMenu: () => void = () => {};
@@ -56,11 +62,15 @@ export class Hud {
   private root: HTMLElement;
   private el: Record<string, HTMLElement> = {};
   private sides: SideEls[] = [];
+  private sideRoots: HTMLElement[] = [];
+  /** Who the right-hand bar is showing: the rival in a duel, whoever the hero is facing in open country. -1 for nobody. */
+  private rival = -1;
   private announceTimer = 0;
   private legendOn = true;
   private view = 0;
-  /** The class picked on the menu. */
+  /** The class and the difficulty picked on the menu. */
   private kit: KitId = "hunter";
+  private difficulty: Difficulty = "normal";
   private screen: Screen = "menu";
 
   constructor(
@@ -95,6 +105,8 @@ export class Hud {
         <div class="combo p0" data-combo="0" hidden><b></b><span>hits</span><em></em></div>
         <div class="combo p1" data-combo="1" hidden><b></b><span>hits</span><em></em></div>
         <div class="announce" data-el="announce" hidden></div>
+        <div class="tally" data-el="tally" hidden><b data-el="tallyBounty"></b><span data-el="tallyGangs"></span></div>
+        <div class="compass" data-el="compass" hidden><i data-el="needle"></i><span data-el="compassText"></span></div>
         <div class="prompt" data-el="prompt" hidden></div>
         <div class="reload" data-el="reload" hidden>
           <p>Reload: press <kbd>K</kbd> in the gold</p>
@@ -117,6 +129,7 @@ export class Hud {
           <button class="small" data-b="special" data-pad="special">Lariat</button>
           <button class="small" data-b="ult">Ult</button>
           <button class="small" data-b="awaken">Awaken</button>
+          <button class="small" data-b="swap">Target</button>
           <button data-b="guard" data-pad="guard">Brace</button>
           <button data-b="dash" data-pad="dash">Charge</button>
           <button class="big" data-b="strike">Strike</button>
@@ -127,17 +140,23 @@ export class Hud {
       <div class="screen" data-el="menu">
         <div class="poster split">
           <div class="col">
-            <p class="eyebrow">Combat prototype · placeholder art</p>
-            <h1>WestX<small>Duel Box</small></h1>
+            <p class="eyebrow">Prototype · placeholder art</p>
+            <h1>WestX<small>The Flats</small></h1>
             <div class="choices">
               <span class="label">Play as</span>
-              ${PLAYABLE.map((k) => `<button class="pick" data-kit="${k}" aria-pressed="false"><b>${CLASSES[k].title}</b><span>${CLASSES[k].pitch}</span></button>`).join("")}
+              ${PLAYABLE.map((k) => `<button class="pick" data-kit="${k}" aria-pressed="false">${CLASSES[k].title}</button>`).join("")}
+              <p class="pitch" data-el="pitch"></p>
             </div>
             <div class="choices">
-              <span class="label">Duel a rival</span>
-              <button class="btn" data-start="easy">Easy</button>
-              <button class="btn" data-start="normal">Normal</button>
-              <button class="btn" data-start="hard">Hard</button>
+              <span class="label">Ride out</span>
+              <button class="btn" data-start="roam">Open country<small>Three gangs, fights anywhere</small></button>
+              <button class="btn" data-start="duel">Arena<small>One rival, one duel</small></button>
+            </div>
+            <div class="choices">
+              <span class="label">How hard</span>
+              <button class="seg" data-diff="easy" aria-pressed="false">Easy</button>
+              <button class="seg" data-diff="normal" aria-pressed="true">Normal</button>
+              <button class="seg" data-diff="hard" aria-pressed="false">Hard</button>
             </div>
             <div class="choices">
               <button class="btn quiet" data-start="training">Training: rival stands still</button>
@@ -174,7 +193,7 @@ export class Hud {
           <h2 data-el="resultTitle"></h2>
           <div class="stats">
             <div><b data-el="statBounty"></b>bounty</div>
-            <div><b data-el="statTime"></b>duel</div>
+            <div><b data-el="statTime"></b><span data-el="statTimeLabel">duel</span></div>
             <div><b data-el="statCombo"></b>best combo</div>
           </div>
           <div class="choices">
@@ -191,6 +210,7 @@ export class Hud {
     for (let i = 0; i < 2; i++) {
       const combo = q(`[data-combo="${i}"]`);
       const cyl = q(`[data-cyl="${i}"]`);
+      this.sideRoots.push(q(`.side.p${i}`));
       this.sides.push({
         hp: q(`[data-hp="${i}"]`),
         trail: q(`[data-trail="${i}"]`),
@@ -213,9 +233,15 @@ export class Hud {
 
     root.querySelectorAll<HTMLElement>("[data-start]").forEach((b) =>
       b.addEventListener("click", () => {
-        const v = b.dataset.start!;
-        if (v === "training") this.onStart("training", "dummy", this.kit);
-        else this.onStart("duel", v as Difficulty, this.kit);
+        const mode = b.dataset.start as StartMode;
+        this.onStart(mode, mode === "training" ? "dummy" : this.difficulty, this.kit);
+      }),
+    );
+    const levels = root.querySelectorAll<HTMLElement>("[data-diff]");
+    levels.forEach((b) =>
+      b.addEventListener("click", () => {
+        this.difficulty = b.dataset.diff as Difficulty;
+        levels.forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
       }),
     );
     root.querySelectorAll<HTMLElement>("[data-kit]").forEach((b) => b.addEventListener("click", () => this.pick(b.dataset.kit as KitId)));
@@ -322,7 +348,7 @@ export class Hud {
     this.el.legend.hidden = !(screen === "fight" && this.legendOn);
     if (!playing) {
       for (const s of this.sides) s.combo.hidden = true;
-      for (const key of ["announce", "prompt", "reload", "verdict"]) this.el[key].hidden = true;
+      for (const key of ["announce", "prompt", "reload", "verdict", "tally", "compass"]) this.el[key].hidden = true;
     }
     this.refreshTouch();
     // Move focus to the first choice so the keyboard works straight away.
@@ -339,6 +365,7 @@ export class Hud {
   private pick(kit: KitId): void {
     this.kit = kit;
     this.root.querySelectorAll<HTMLElement>("[data-kit]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kit === kit)));
+    this.el.pitch.textContent = CLASSES[kit].pitch;
     this.showClass(kit);
   }
 
@@ -353,15 +380,44 @@ export class Hud {
     });
   }
 
-  setNames(player: string, rival: string, sub: string): void {
+  setNames(player: string, sub: string): void {
     this.root.querySelector('[data-name="0"]')!.textContent = player;
-    this.root.querySelector('[data-name="1"]')!.textContent = rival;
-    this.root.querySelector('[data-sub="1"]')!.textContent = sub;
+    this.root.querySelector('[data-sub="0"]')!.textContent = sub;
+  }
+
+  /** Which bar a fighter's news belongs on: 0 for the player, 1 for whoever is on the right, -1 for neither. */
+  private sideOf(id: number): number {
+    return id === this.view ? 0 : id === this.rival ? 1 : -1;
+  }
+
+  /** Puts a fighter on the right-hand bar, or clears it. */
+  private showRival(f: Fighter | null, m: Match): void {
+    const id = f ? f.id : -1;
+    if (id === this.rival) return;
+    this.rival = id;
+    const side = this.sideRoots[1];
+    side.hidden = !f;
+    this.sides[1].combo.hidden = true;
+    this.sides[1].lastHits = 0;
+    if (!f) return;
+    // Rabble get a name and a health bar. A leader or a rival gets the lot.
+    side.classList.toggle("minor", f.rank === "rabble");
+    const title = CLASSES[f.kit].title;
+    const named = m.opts.mode === "roam" && f.rank === "named";
+    this.root.querySelector('[data-name="1"]')!.textContent = named ? f.name : title;
+    this.root.querySelector('[data-sub="1"]')!.textContent = named ? title : "";
+    // A new face starts with a full-width trail, not one sliding over from the last.
+    const trail = this.sides[1].trail;
+    trail.style.transition = "none";
+    trail.style.transform = `scaleX(${Math.max(0, f.hp / f.maxHp)})`;
+    void trail.offsetWidth;
+    trail.style.transition = "";
   }
 
   /** Call when a new match starts so bars snap to full with no trailing animation. */
   reset(view: number, kit: KitId): void {
     this.view = view;
+    this.rival = -2;
     this.showClass(kit);
     for (const s of this.sides) {
       s.lastHits = 0;
@@ -371,7 +427,7 @@ export class Hud {
       void s.trail.offsetWidth;
       s.trail.style.transition = "";
     }
-    for (const key of ["announce", "prompt", "reload", "verdict"]) this.el[key].hidden = true;
+    for (const key of ["announce", "prompt", "reload", "verdict", "tally", "compass"]) this.el[key].hidden = true;
     this.app.classList.remove("cine", "fast", "awake-0", "awake-1");
   }
 
@@ -387,22 +443,32 @@ export class Hud {
   }
 
   showResult(stats: ResultStats): void {
-    this.el.resultEyebrow.textContent = stats.won ? "Bounty collected" : "Bounty lost";
-    this.el.resultTitle.textContent = stats.won
-      ? stats.alive
-        ? "Brought in alive"
-        : "Brought in dead"
-      : stats.alive
-        ? "You were roped"
-        : "You were shot down";
-    this.el.statBounty.textContent = stats.won ? money(stats.bounty) : "$0";
+    const r = stats.roam;
+    if (r) {
+      this.el.resultEyebrow.textContent = `Open country · ${r.leaders} of ${r.of} leaders brought in`;
+      this.el.resultTitle.textContent = stats.won ? "The Flats are quiet" : r.runDown ? "Run down by a crew" : stats.alive ? "You were roped" : "You were shot down";
+      this.el.statTimeLabel.textContent = "in the field";
+    } else {
+      this.el.resultEyebrow.textContent = stats.won ? "Bounty collected" : "Bounty lost";
+      this.el.resultTitle.textContent = stats.won
+        ? stats.alive
+          ? "Brought in alive"
+          : "Brought in dead"
+        : stats.alive
+          ? "You were roped"
+          : "You were shot down";
+      this.el.statTimeLabel.textContent = "duel";
+    }
+    this.el.statBounty.textContent = money(stats.bounty);
     const s = Math.round(stats.seconds);
     this.el.statTime.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
     this.el.statCombo.textContent = `${stats.bestCombo}`;
   }
 
   /** Flashes a short state on the player's cylinder, such as a perfect reload. */
-  private pulse(side: number, cls: string): void {
+  private pulse(id: number, cls: string): void {
+    const side = this.sideOf(id);
+    if (side < 0) return;
     const c = this.sides[side].cyl;
     c.classList.remove("perfect", "fumble");
     void c.offsetWidth;
@@ -451,6 +517,12 @@ export class Hud {
       case "awaken":
         this.announce(mine(e.id) ? CLASSES[m.fighters[e.id].kit].awakening : "Rival awakens", "fulgur", 1000);
         break;
+      case "alert":
+        this.announce("They have seen you", "small ember", 1100);
+        break;
+      case "callOut":
+        this.announce(`${m.fighters[e.id].name} calls you out`, "small ember", 1900);
+        break;
       case "cineStart":
         this.announce(CLASSES[m.fighters[e.att].kit].ultimate, "", 1300);
         break;
@@ -464,12 +536,17 @@ export class Hud {
       case "verdictStart":
         if (!mine(e.winner)) this.announce("Beaten", "small ember", 1400);
         break;
-      case "ko":
-        this.announce(e.alive ? "Brought in alive" : "Brought in dead", e.alive ? "small fulgur" : "small ember", 2400);
+      case "ko": {
+        const runDown = mine(e.loser) && m.fighters[e.winner].rank === "rabble";
+        const text = runDown ? "Run down" : e.alive ? "Brought in alive" : "Brought in dead";
+        this.announce(e.bounty > 0 ? `${text} · ${money(e.bounty)}` : text, e.alive ? "small fulgur" : "small ember", 2400);
         if (!e.alive) this.flash();
         break;
+      }
       case "comboEnd": {
-        const s = this.sides[e.att];
+        const side = this.sideOf(e.att);
+        if (side < 0) break;
+        const s = this.sides[side];
         if (e.hits >= 2) {
           s.comboN.textContent = `${e.hits}`;
           s.comboD.textContent = `${e.damage} damage`;
@@ -491,19 +568,24 @@ export class Hud {
     w.classList.add("go");
   }
 
-  /** Per-frame refresh of bars and state-driven overlays. */
-  update(m: Match, playing: boolean): void {
+  /** Per-frame refresh of bars and state-driven overlays. `heading` is the way the camera faces. */
+  update(m: Match, playing: boolean, heading: number): void {
     const app = this.app;
     const me = m.fighters[this.view];
+    const roam = m.opts.mode === "roam";
     app.classList.toggle("fast", playing && (me.state === "chase" || me.state === "zip"));
-    app.classList.toggle("awake-0", m.fighters[0].awakened > 0);
-    app.classList.toggle("awake-1", m.fighters[1].awakened > 0);
+    app.classList.toggle("awake-0", me.awakened > 0);
+    app.classList.toggle("awake-1", m.fighters.some((f) => f.team !== me.team && f.awakened > 0));
     // Black bars for anything staged: the ultimate, a standoff, the verdict.
     app.classList.toggle("cine", !!m.cine || !!m.standoff || m.phase === "verdict");
     if (!playing) return;
 
+    const them = roam ? targetOf(m, me) : m.fighters[1];
+    this.showRival(them, m);
+    const shown = [me, them];
     for (let i = 0; i < 2; i++) {
-      const f = m.fighters[i];
+      const f = shown[i];
+      if (!f) continue;
       const s = this.sides[i];
       const kit = KITS[f.kit];
       const hp = Math.max(0, f.hp / f.maxHp);
@@ -549,6 +631,31 @@ export class Hud {
       s.lastHits = hits;
     }
 
+    // Open country: what the hero has earned, how many gangs are left, and which way the nearest trouble is.
+    const staged = !!m.cine || !!m.standoff || m.phase !== "fight";
+    this.el.tally.hidden = !roam;
+    let near: Fighter | null = null;
+    if (roam) {
+      let gangs = 0;
+      for (const f of m.fighters) {
+        if (f.team === me.team || !isUp(f)) continue;
+        if (f.rank === "named") gangs++;
+        if (!near || Math.hypot(f.pos.x - me.pos.x, f.pos.z - me.pos.z) < Math.hypot(near.pos.x - me.pos.x, near.pos.z - me.pos.z)) near = f;
+      }
+      this.el.tallyBounty.textContent = money(m.bounty);
+      this.el.tallyGangs.textContent = gangs === 0 ? "no gangs left" : gangs === 1 ? "1 gang left" : `${gangs} gangs left`;
+    }
+    const pointing = roam && !them && !staged && !!near;
+    this.el.compass.hidden = !pointing;
+    if (pointing && near) {
+      const dx = near.pos.x - me.pos.x;
+      const dz = near.pos.z - me.pos.z;
+      const far = Math.hypot(dx, dz);
+      // Up the screen is the way the camera faces.
+      this.el.needle.style.transform = `rotate(${Math.atan2(dx, dz) - heading}rad)`;
+      this.el.compassText.textContent = far <= C.LOCK_R ? `${Math.round(far)} m · T to pick a target` : `${Math.round(far)} m to the nearest gang`;
+    }
+
     // The reload gauge: a marker sweeping toward a gold zone.
     const reloading = me.reload > 0 && m.phase === "fight" && !m.standoff && !m.cine;
     this.el.reload.hidden = !reloading;
@@ -565,12 +672,12 @@ export class Hud {
     const waiting = !!s && s.t < s.bellAt;
     this.el.prompt.hidden = !waiting;
     if (waiting && s) {
-      this.el.prompt.textContent = s.lock[this.view] > 0 ? "You flinched. Your hand will be slow." : "Wait for the bell. Then shoot.";
+      this.el.prompt.textContent = s.lock[Math.max(0, s.ids.indexOf(this.view))] > 0 ? "You flinched. Your hand will be slow." : "Wait for the bell. Then shoot.";
     }
 
     // Dead or alive: only the winner chooses.
     const v = m.verdict;
-    const choosing = m.phase === "verdict" && !!v && v.choice === null && m.winner === this.view;
+    const choosing = m.phase === "verdict" && !!v && v.choice === null && v.winner === this.view;
     this.el.verdict.hidden = !choosing;
     if (choosing && v) this.el.verdictTimer.style.transform = `scaleX(${Math.max(0, 1 - v.t / C.VERDICT_T)})`;
   }

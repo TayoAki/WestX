@@ -5,7 +5,7 @@ import { GlowLayer } from "@babylonjs/core/Layers/glowLayer";
 import { ShaderMaterial } from "@babylonjs/core/Materials/shaderMaterial";
 import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial";
 import { Color3, Color4 } from "@babylonjs/core/Maths/math.color";
-import { Vector3, Vector4 } from "@babylonjs/core/Maths/math.vector";
+import { Vector3 } from "@babylonjs/core/Maths/math.vector";
 import { CreateBox } from "@babylonjs/core/Meshes/Builders/boxBuilder";
 import { CreateCylinder } from "@babylonjs/core/Meshes/Builders/cylinderBuilder";
 import { CreateGround } from "@babylonjs/core/Meshes/Builders/groundBuilder";
@@ -87,20 +87,12 @@ varying vec3 vW;
 uniform vec3 cameraPosition;
 uniform vec3 uHaze;
 uniform float uArena;
-uniform vec4 uShadow0;
-uniform vec4 uShadow1;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float noise(vec2 p) {
   vec2 i = floor(p);
   vec2 f = fract(p);
   f = f * f * (3.0 - 2.0 * f);
   return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
-}
-float blob(vec4 s) {
-  // xyz: fighter position, w: strength. The shadow widens and fades with height.
-  float r = 0.75 + s.y * 0.06;
-  float d = length(vW.xz - s.xz) / r;
-  return (1.0 - smoothstep(0.55, 1.0, d)) * s.w * clamp(1.0 - s.y * 0.035, 0.25, 1.0);
 }
 void main() {
   vec2 p = vW.xz;
@@ -118,8 +110,6 @@ void main() {
   float edge = 1.0 - smoothstep(0.0, 0.35, abs(r - uArena));
   sand = mix(sand, vec3(0.37, 0.95, 1.0), edge);
   sand *= mix(1.0, 0.86, step(uArena, r));
-  float sh = max(blob(uShadow0), blob(uShadow1));
-  sand = mix(sand, vec3(0.2, 0.13, 0.26), sh * 0.6);
   float haze = clamp((length(cameraPosition - vW) - 70.0) / 300.0, 0.0, 0.8);
   gl_FragColor = vec4(mix(sand, uHaze, haze), 1.0);
 }`;
@@ -129,8 +119,8 @@ export interface Stage {
   scene: Scene;
   camera: TargetCamera;
   glow: GlowLayer;
-  /** Positions a fighter's blob shadow. */
-  setShadow(index: number, x: number, y: number, z: number, strength: number): void;
+  /** Sets how far out the boundary wire runs: the arena's edge, or the open field's. */
+  setBounds(radius: number): void;
   update(dt: number): void;
 }
 
@@ -144,6 +134,12 @@ export function makeGlow(scene: Scene, name: string, hex: string, alpha = 1): St
   mat.alpha = alpha;
   mat.backFaceCulling = false;
   return mat;
+}
+
+/** Keeps a mesh out of the bloom: flat markers such as shadows and health bars should not glow. */
+export function noGlow(scene: Scene, mesh: Mesh): void {
+  const layer = scene.effectLayers.find((l) => l.name === "glow");
+  if (layer instanceof GlowLayer) layer.addExcludedMesh(mesh);
 }
 
 export function createStage(canvas: HTMLCanvasElement, lowRes: boolean): Stage {
@@ -182,13 +178,10 @@ export function createStage(canvas: HTMLCanvasElement, lowRes: boolean): Stage {
   const ground = CreateGround("ground", { width: 1000, height: 1000, subdivisions: 1 }, scene);
   const groundMat = new ShaderMaterial("groundMat", scene, { vertex: "westxGround", fragment: "westxGround" }, {
     attributes: ["position"],
-    uniforms: ["world", "viewProjection", "cameraPosition", "uHaze", "uArena", "uShadow0", "uShadow1"],
+    uniforms: ["world", "viewProjection", "cameraPosition", "uHaze", "uArena"],
   });
   groundMat.setColor3("uHaze", HAZE);
   groundMat.setFloat("uArena", C.ARENA_R);
-  const shadows = [new Vector4(0, 0, 0, 0), new Vector4(0, 0, 0, 0)];
-  groundMat.setVector4("uShadow0", shadows[0]);
-  groundMat.setVector4("uShadow1", shadows[1]);
   ground.material = groundMat;
   ground.isPickable = false;
 
@@ -233,9 +226,8 @@ export function createStage(canvas: HTMLCanvasElement, lowRes: boolean): Stage {
     scene,
     camera,
     glow,
-    setShadow(index, x, y, z, strength) {
-      shadows[index].set(x, y, z, strength);
-      groundMat.setVector4(index === 0 ? "uShadow0" : "uShadow1", shadows[index]);
+    setBounds(radius) {
+      groundMat.setFloat("uArena", radius);
     },
     update(dt) {
       nextStrike -= dt;

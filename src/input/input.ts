@@ -3,6 +3,7 @@ import { blankInput, BUTTONS, type Button, type InputFrame } from "../sim/types"
 // Keyboard, gamepad and touch all feed the same InputFrame.
 // The camera needs no mouse, so the whole game is playable from the keyboard.
 // Movement is relative to the rival: W closes in, S backs off, A and D circle.
+// With nobody to fight it is relative to the camera, which the game fills in as `yaw`.
 
 const KEYS: Record<string, Button> = {
   KeyJ: "strike",
@@ -18,6 +19,8 @@ const KEYS: Record<string, Button> = {
   KeyI: "ult",
   KeyF: "awaken",
   KeyO: "awaken",
+  KeyT: "swap",
+  Tab: "swap",
 };
 
 const MOVE_KEYS = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"];
@@ -34,6 +37,7 @@ const PAD: [number, Button][] = [
   [4, "ult"],
   [10, "awaken"],
   [11, "awaken"],
+  [8, "swap"],
 ];
 
 export class Input {

@@ -6,11 +6,13 @@ import type { V3 } from "./vec";
  * One tick of player intent. Movement is relative to the line between the two
  * fighters, not to the camera: `my` is toward the opponent, `mx` circles right.
  * `tilt` is the raw up/down the player is holding: up launches, down slams.
+ * With nobody to fight, movement follows `yaw` instead: the heading of the camera.
  */
 export interface InputFrame {
   mx: number;
   my: number;
   tilt: number;
+  yaw: number;
   strike: boolean;
   shot: boolean;
   dash: boolean;
@@ -20,15 +22,18 @@ export interface InputFrame {
   special: boolean;
   ult: boolean;
   awaken: boolean;
+  /** Switch to the next nearest enemy. */
+  swap: boolean;
 }
 
-export const BUTTONS = ["strike", "shot", "dash", "jump", "guard", "steady", "special", "ult", "awaken"] as const;
+export const BUTTONS = ["strike", "shot", "dash", "jump", "guard", "steady", "special", "ult", "awaken", "swap"] as const;
 export type Button = (typeof BUTTONS)[number];
 
 export const blankInput = (): InputFrame => ({
   mx: 0,
   my: 0,
   tilt: 0,
+  yaw: 0,
   strike: false,
   shot: false,
   dash: false,
@@ -38,6 +43,7 @@ export const blankInput = (): InputFrame => ({
   special: false,
   ult: false,
   awaken: false,
+  swap: false,
 });
 
 export type FState =
@@ -93,8 +99,11 @@ export type MoveId =
   | "prodBlast"
   | "prodLaunch"
   | "prodSlam"
-  /** Lobbing a gas canister at the target's feet. */
-  | "canister"
+  /** Setting a sentry down. */
+  | "sentry"
+  // Rabble: one or two slow, readable swings.
+  | "g1"
+  | "g2"
   // The outlaw.
   | "s1"
   | "s2"
@@ -127,10 +136,34 @@ export interface Combo {
   launches: number;
 }
 
+/**
+ * How much a fighter matters.
+ *  - hero: one of the three classes, played by a person (or by the AI behind the menu).
+ *  - named: a gang leader or a duel rival. A full kit, and worth a bounty.
+ *  - rabble: the leader's crew. Weak alone, and they take turns.
+ */
+export type Rank = "hero" | "named" | "rabble";
+
 export interface Fighter {
   id: number;
   name: string;
   kit: KitId;
+  rank: Rank;
+  /** Fighters on different teams can hurt each other. */
+  team: number;
+  /** Which gang they ride with, or -1. */
+  gang: number;
+  /** Asleep fighters stand at their camp until trouble comes to them. */
+  awake: boolean;
+  /** Where they stand when nothing is happening. */
+  home: V3;
+  /** The fighter they are facing, or -1 for nobody. */
+  target: number;
+  /** Who hit them last, or -1. Escapes and blame go to this fighter. */
+  lastHitBy: number;
+  /** Rabble take turns: frames left of this one's turn to attack, and how long it has waited. */
+  turn: number;
+  waited: number;
   maxHp: number;
   pos: V3;
   vel: V3;
@@ -187,7 +220,8 @@ export interface Fighter {
   move: MoveId | null;
   /** Frame within the current move. */
   mf: number;
-  hitDone: boolean[];
+  /** Who the current move has already hit, so one swing hits each enemy once. */
+  hitIds: number[];
   moveHit: boolean;
   /** For lariat: pull yourself to the target instead of the target to you. */
   zipFlag: boolean;
@@ -229,11 +263,15 @@ export interface Projectile {
   status?: StatusId;
   /** How sharply it can turn toward its target each tick, in radians. Zero flies straight. */
   homing: number;
+  /** Who it was aimed at, or -1. Homing shots bend toward them. */
+  target: number;
+  /** Fighters it has already gone through. */
+  hit: number[];
 }
 
-export type ZoneKind = "hex" | "storm" | "gas";
+export type ZoneKind = "hex" | "storm";
 
-/** An area on the ground that hurts anyone but its owner: the witch's circles, the engineer's gas. */
+/** An area on the ground that hurts the other side: the witch's circles and storms. */
 export interface Zone {
   id: number;
   kind: ZoneKind;
@@ -250,6 +288,18 @@ export interface Zone {
   every: number;
   tick: number;
   status: StatusId | null;
+}
+
+/** A machine the engineer sets down. It picks its own targets and fires until it runs down. */
+export interface Turret {
+  id: number;
+  owner: number;
+  pos: V3;
+  yaw: number;
+  /** Frames until it runs down. */
+  life: number;
+  /** Frames until it can fire again. */
+  cd: number;
 }
 
 export type PropKind = "crate" | "barrel" | "cactus" | "rock";
@@ -270,6 +320,8 @@ export interface Cine {
 }
 
 export interface Standoff {
+  /** The two fighters facing each other. */
+  ids: [number, number];
   t: number;
   /** Frame the bell tolls. Drawing before it is a flinch. */
   bellAt: number;
@@ -280,13 +332,15 @@ export interface Standoff {
 }
 
 export interface Verdict {
+  winner: number;
+  loser: number;
   t: number;
   choice: "dead" | "alive" | null;
   /** Frame the choice was made. */
   at: number;
 }
 
-export type ShotKind = "bullet" | "fan" | "quick" | "coup" | "bolt" | "rivet" | "tesla";
+export type ShotKind = "bullet" | "fan" | "quick" | "coup" | "bolt" | "rivet" | "tesla" | "sentry";
 
 export type SimEvent =
   | { type: "phase"; phase: Match["phase"] }
@@ -314,6 +368,10 @@ export type SimEvent =
   | { type: "zoneSpawn"; id: number; kind: ZoneKind; owner: number; pos: V3; radius: number; fuse: number; life: number }
   | { type: "zoneErupt"; id: number; kind: ZoneKind; pos: V3; radius: number }
   | { type: "zoneEnd"; id: number }
+  | { type: "turretUp"; id: number; owner: number; pos: V3 }
+  | { type: "turretDown"; id: number; pos: V3 }
+  /** Lightning jumped from one body to the next. */
+  | { type: "arc"; from: V3; to: V3 }
   /** A condition took hold of a fighter. */
   | { type: "status"; id: number; kind: StatusId; pos: V3 }
   /** Two conditions met on one fighter. */
@@ -349,35 +407,60 @@ export type SimEvent =
   | { type: "standoffEnd"; winner: number; trade: boolean }
   | { type: "verdictStart"; winner: number; pos: V3 }
   | { type: "comboEnd"; att: number; hits: number; damage: number }
-  | { type: "ko"; winner: number; pos: V3; alive: boolean };
+  /** One of the rabble went down. */
+  | { type: "down"; id: number; by: number; pos: V3 }
+  /** A gang noticed the hero. */
+  | { type: "alert"; gang: number; pos: V3 }
+  /** A gang's crew is beaten and its leader steps forward. */
+  | { type: "callOut"; id: number; pos: V3 }
+  /** A hero or a named fighter was finished, one way or the other. `bounty` is what it paid. */
+  | { type: "ko"; winner: number; loser: number; pos: V3; alive: boolean; bounty: number };
 
 export interface MatchOptions {
   /** Training: the opponent's health refills and the player's Nerve stays topped up. */
   training: boolean;
   /** Open the duel with a standoff. */
   opening: boolean;
-  /** Which kit each fighter uses. */
+  /** Which kit each fighter uses. In the overworld only the first is read: it is the hero's. */
   kits: [KitId, KitId];
+  /**
+   * `duel` is the arena: two fighters, one formal fight.
+   * `roam` is the overworld: one hero, gangs scattered about, fights wherever they meet.
+   */
+  mode: "duel" | "roam";
+  /** How many gangs are camped in the overworld. */
+  gangs: number;
 }
 
 export interface Match {
   tick: number;
   phase: "intro" | "fight" | "verdict" | "ko" | "done";
   phaseT: number;
-  fighters: [Fighter, Fighter];
+  fighters: Fighter[];
+  /** How far from the centre the field runs. */
+  radius: number;
   projectiles: Projectile[];
   nextProjId: number;
   props: Prop[];
   zones: Zone[];
   nextZoneId: number;
+  turrets: Turret[];
+  nextTurretId: number;
   /** Frames of freeze left after a hit. */
   hitstop: number;
   cine: Cine | null;
   standoff: Standoff | null;
+  /** A gang leader on their way to call the hero out, or -1, and how long they have been at it. */
+  callout: number;
+  calloutT: number;
   /** Frames before another standoff can begin. */
   standoffCd: number;
   verdict: Verdict | null;
+  /** The fighter who won the last formal finish, and the one who lost it. -1 before any. */
   winner: number;
+  loser: number;
+  /** What the hero has earned so far. */
+  bounty: number;
   /** How the loser was brought in. */
   outcome: "dead" | "alive" | null;
   rng: Rng;

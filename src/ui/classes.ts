@@ -23,6 +23,19 @@ export interface ClassText {
 
 const key = (k: string, text: string): string => `<span><kbd>${k}</kbd>${text}</span>`;
 
+/** A crew member: someone to fight, never someone to be. */
+const NOBODY: ClassText = {
+  title: "",
+  pitch: "",
+  meter: "Nerve",
+  awakening: "",
+  ultimate: "",
+  touch: { guard: "Guard", dash: "Dash", steady: "Steady", special: "Lariat" },
+  moves: "",
+  notes: "",
+  legend: "",
+};
+
 export const CLASSES: Record<KitId, ClassText> = {
   hunter: {
     title: "Lawman",
@@ -41,14 +54,14 @@ export const CLASSES: Record<KitId, ClassText> = {
       <li><kbd>E</kbd> Lariat: rope them in. Hold S to zip to them</li>`,
     notes: `
       <p class="fine"><b>You are the balance.</b> No tricks to set up: you hit hard up close, shoot straight at range, and the brace on your left arm is both shield and cannon. Its blast spends Nerve.</p>
-      <p class="fine"><b>Time the brace.</b> Raise it just as a shot lands and it goes back at the shooter. It cannot stop the ground: step out of circles and gas.</p>`,
+      <p class="fine"><b>Time the brace.</b> Raise it just as a shot lands and it goes back at the shooter. It cannot stop the ground: step out of circles.</p>`,
     legend:
       key("J", "strike") + key("Shift", "brace: walk, deflect, catch") + key("Shift+J", "thunderclap") + key("K", "shot, hold to fan") +
       key("Q", "steady, then K to quickdraw") + key("L", "charge") + key("E", "lariat"),
   },
   witch: {
     title: "Witch",
-    pitch: "Owns the ground. Her attacks are areas, not aims.",
+    pitch: "Owns the ground, from far away. Areas, not aims.",
     meter: "Hex",
     awakening: "Witching Hour",
     ultimate: "The Long Night",
@@ -70,23 +83,23 @@ export const CLASSES: Record<KitId, ClassText> = {
   },
   engineer: {
     title: "Engineer",
-    pitch: "Owns conditions. Poison wears them down; shock stops them.",
+    pitch: "Builds machines and fights close. A sentry that shoots on its own, and lightning that jumps.",
     meter: "Pressure",
     awakening: "Overpressure",
     ultimate: "Redline",
-    touch: { guard: "Guard", dash: "Jet", steady: "Charge", special: "Gas" },
+    touch: { guard: "Guard", dash: "Jet", steady: "Charge", special: "Sentry" },
     moves: `
       <li><kbd>J</kbd> Strike. Wrench, gauntlet, then the prod, which shocks</li>
       <li><kbd>K</kbd> Rivet gun. Six rivets, and every one poisons. Hold it to empty the gun</li>
-      <li><kbd>Q</kbd> Build pressure: fills the meter and reloads. Press K from it for a tesla bolt that shocks</li>
-      <li><kbd>E</kbd> Gas canister: poisons the ground under them</li>
+      <li><kbd>E</kbd> Sentry: set a turret down. It picks its own targets and fires poison rivets while you fight</li>
+      <li><kbd>Q</kbd> Build pressure: fills the meter and reloads. Press K from it for tesla: lightning that shocks, then jumps to whoever is standing near</li>
       <li><kbd>L</kbd> Jet dash. Two, and they come back slowly</li>
       <li><kbd>Shift</kbd> Guard. Tap it while being hit and your plating shocks them</li>`,
     notes: `
-      <p class="fine"><b>Poison</b> eats health for five seconds. <b>Shock</b> stops a rival where they stand, slows them, and holds their dashes.</p>
-      <p class="fine"><b>Overload.</b> Put two different conditions on one rival and they burn off together in one burst. You carry both: poison first, then shock.</p>`,
+      <p class="fine"><b>You build, and you fight close.</b> Set the sentry down and step in with the wrench: its rivets poison whoever you are hitting, and your prod shocks them.</p>
+      <p class="fine"><b>Overload.</b> Two different conditions on one rival burn off together in one burst, and the burst catches anyone beside them. You carry both: poison, then shock.</p>`,
     legend:
-      key("J", "strike, ends in shock") + key("K", "rivets: poison") + key("Q", "pressure, then K for tesla") + key("E", "gas") +
+      key("J", "strike, ends in shock") + key("K", "rivets: poison") + key("E", "sentry") + key("Q", "pressure, then K for tesla") +
       key("L", "jet") + key("Shift", "guard / shock plating"),
   },
   outlaw: {
@@ -100,7 +113,9 @@ export const CLASSES: Record<KitId, ClassText> = {
     notes: "",
     legend: "",
   },
+  thug: { ...NOBODY, title: "Thug" },
+  gunhand: { ...NOBODY, title: "Gunhand" },
 };
 
-/** The classes a person can pick. The outlaw is a rival only. */
+/** The classes a person can pick. The outlaw is a rival only, and the rest are rabble. */
 export const PLAYABLE: KitId[] = ["hunter", "witch", "engineer"];

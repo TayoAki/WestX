@@ -640,10 +640,12 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
         case "s1":
         case "w1":
         case "e1":
+        case "g1":
           res.pose = strike(S1_WIND, S1_HIT, f.mf, from, mv!.total);
           break;
         case "a2":
         case "e2":
+        case "g2":
           res.pose = strike(S2_WIND, S2_HIT, f.mf, from, mv!.total);
           break;
         case "h1":
@@ -661,8 +663,9 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
           // Arms up to draw it, then down to set it.
           res.pose = f.mf < mv!.fireAt! ? CHANT : SLAM_HIT;
           break;
-        case "canister":
-          res.pose = f.mf < mv!.fireAt! ? LARIAT_WIND : LARIAT_THROW;
+        case "sentry":
+          // Down on one knee to set it, then up.
+          res.pose = f.mf < mv!.fireAt! ? SLAM_WIND : SLAM_HIT;
           break;
         case "prodBlast":
           res.pose = strike(BLAST_WIND, BLAST_HIT, f.mf, from, mv!.total);

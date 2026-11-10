@@ -86,9 +86,10 @@ alone. The reasoning comes from the [blueprint](05-blueprint.md).
 
 | | Lawman | Witch | Engineer |
 |---|---|---|---|
-| Owns | The balance: solid at every range, no setup needed | The ground: area attacks | Conditions: poison and shock |
-| Combat role | A wall that walks: heavy, deliberate, hard to move | Keeps distance and makes you cross her circles | Wears you down, then stops you |
-| Weapons | Revolver, storm brace, fulgur-wire lariat | Staff, hexes | Rivet gun, steam gauntlet, gas |
+| Owns | The balance: solid at every range, no setup needed | The ground, from far away: area attacks | Machines, up close: a sentry, and lightning that jumps |
+| Combat role | A wall that walks: heavy, deliberate, hard to move | Keeps distance and makes you cross her circles | Sets a machine down and fights beside it |
+| Weapons | Revolver, storm brace, fulgur-wire lariat | Staff, hexes | Rivet gun, steam gauntlet, sentry |
+| Against a crowd | The quickdraw goes through a line of them | A circle catches an area of them | Tesla jumps through a cluster of them |
 | Meter | **Nerve** | **Hex** | **Pressure** |
 | Health | Most | Least | Middle |
 | Mobility | Two shoulder charges, no double jump | Three blinks, a double jump, and a slow float down | Two jet dashes, a double jump |
@@ -101,12 +102,12 @@ Three conditions, each with one job:
 
 | Condition | Job | Who applies it |
 |---|---|---|
-| **Poison** | Wears health down for five seconds | Engineer: rivets and gas |
-| **Shock** | Stops a fighter where they stand, then slows them and holds their dashes | Engineer: the prod, the tesla bolt, shock plating |
+| **Poison** | Wears health down for five seconds | Engineer: rivets, his own and the sentry's |
+| **Shock** | Stops a fighter where they stand, then slows them and holds their dashes | Engineer: the prod, tesla, shock plating |
 | **Hex** | Every hit against them hurts more | Witch: novas, circles, the storm, the knot |
 
 **Overload:** two different conditions on one fighter burn off together in a single
-burst. The engineer can do it alone. Once all three classes share a fight, one
+burst, and the burst catches anyone standing beside them. The engineer can do it alone. Once all three classes share a fight, one
 class's condition becomes another's overload, and that is what makes them a team.
 
 ### Lawman
@@ -176,18 +177,24 @@ it does.
 
 ### Engineer
 
-He wins by what he leaves on you.
+He builds, and he fights close. Where the witch stands off and owns the ground, he
+sets a machine down and steps in beside it. An earlier version gave him a gas cloud;
+it played like the witch's circle in another colour, so it was cut.
 
+- **Sentry:** a turret he sets down a stride ahead. It picks its own target, the
+  nearest enemy in range, and fires poisoned rivets for eight seconds. One at a time.
+- **Wrench, gauntlet, prod:** a three-hit string ending in the prod, which shocks.
+  With the sentry's poison already on the target, that is an overload.
 - **Rivet gun:** six rivets, and every one poisons. Same cylinder and timed reload
   as the lawman's revolver.
-- **Wrench, gauntlet, prod:** a three-hit string ending in the prod, which shocks.
-- **Pressure, then tesla:** his version of holding steady and the quickdraw. The bolt
-  does less than a bullet and leaves the target shocked.
-- **Gas canister:** a cloud at the target's feet that sits there and poisons anyone in it.
+- **Pressure, then tesla:** his version of holding steady and the quickdraw. The
+  lightning shocks whoever it hits, then jumps to the nearest body within reach, up
+  to three times, for half the damage each jump.
 - **Shock plating:** caught mid-combo, his armor shocks the attacker.
 - **Jet dash:** two, returning slowly.
 - **Awakening — Overpressure. Ultimate — Redline.**
-- **Weakness:** his damage arrives late. Rush him before the conditions stack.
+- **Weakness:** his damage arrives late, and the sentry stays where he put it. Rush
+  him, or fight him somewhere else.
 
 ### The posse
 
@@ -249,6 +256,32 @@ dynamite to shoot, and a whistle that sends your horse charging through.
 | **Rabble** | Gang gunmen, feral automata, in groups | Over the shoulder | You tear through them |
 | **Named** | Bounties, rival hunters, coven witches | **Duel**: lock-on, soft arena | A full one-on-one with all the verbs on both sides |
 | **Titans** | War machines, storm-beasts | Pulled-back cinematic | Multi-phase, breakable parts, scripted beats |
+
+**What is built:** rabble and named. Titans are not.
+
+**Crowd rules.** These are what make a group fight a brawl and not a queue:
+
+- One swing hits everyone in its reach, once each, and a combo through a crowd does
+  not hit softer with each body the way a long combo on one fighter does.
+- Rabble fly further the more they have been hurt. Under half health, any solid hit
+  takes them off their feet.
+- The hit that finishes one throws them clean out of the fight. There is no verdict
+  for rabble.
+- A body sent flying knocks down any of its own side it lands on.
+- Rabble take turns. Two may attack at once, turns are handed out a beat apart, and
+  the one who has waited longest goes next. A crew member without a turn cannot swing.
+
+**Gangs.** A gang is a leader and four to six crew, asleep at a camp until the hero
+comes within 20 m or hits one of them. The hero can pick a target from further out
+and open the fight on their own terms.
+
+- Beat the crew and the leader, untouched, strides in and **calls the hero out**: a
+  standoff, then a duel, where they stand.
+- Hit the leader first and they join the brawl without ceremony.
+- Beat the leader and whatever is left of the crew gives up.
+- A gang leader has less health than an arena rival. Open-country fights are meant to
+  be quicker than the arena's.
+- With nobody after them, the hero gets their health back over about twenty seconds.
 
 **Soft arena:** a Duel does not load a separate level. The fight happens where you
 stand, the world stays live, and a wide invisible boundary keeps both fighters in the

@@ -186,26 +186,23 @@
 
 /* Class picker on the menu. */
 #ui .pick {
-  flex: 1 1 150px;
+  flex: 1 1 84px;
   min-width: 0;
-  padding: 8px 10px;
-  text-align: left;
+  min-height: 44px;
+  padding: 6px 8px;
   color: var(--ink);
   background: transparent;
   border: 2px solid var(--ink);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-#ui .pick b {
   font-family: var(--display);
-  font-weight: 400;
-  font-size: 20px;
+  font-size: clamp(15px, 1.9vw, 19px);
 }
-#ui .pick span {
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.2;
+/* What the picked class is, in a line. Two lines are kept so the menu does not jump as you pick. */
+.poster .pitch {
+  flex-basis: 100%;
+  min-height: 2.5em;
+  margin-bottom: -6px;
+  font-size: 15px;
+  line-height: 1.25;
 }
 #ui .pick[aria-pressed="true"] {
   background: var(--ink);
@@ -485,7 +482,10 @@
   position: absolute;
   left: 0;
   bottom: 0;
-  max-width: min(560px, 100%);
+  max-width: min(600px, 100%);
+  /* Each key is one item, so the list wraps between keys and never mid-phrase. */
+  display: flex;
+  flex-wrap: wrap;
   padding: 8px 12px;
   background: var(--ink-soft);
   border-left: 4px solid var(--gold);
@@ -634,7 +634,7 @@
   margin: 0;
   font-family: var(--display);
   font-weight: 400;
-  font-size: clamp(54px, 15vw, 112px);
+  font-size: clamp(44px, min(15vw, 13vh), 112px);
   line-height: 0.82;
   letter-spacing: -0.01em;
   text-wrap: balance;
@@ -911,6 +911,19 @@
   .poster {
     transform: none;
   }
+  /* Every line counts on a phone held sideways: get to the buttons. */
+  .poster .eyebrow {
+    display: none;
+  }
+  /* And the bounty sits beside the pause button, not over the fight. */
+  .tally {
+    top: 4px;
+    left: calc(50% + 30px);
+    transform: none;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
   .poster h1 {
     font-size: clamp(40px, 12vh, 80px);
   }
@@ -970,4 +983,94 @@
   #app.fast .speedlines {
     opacity: 0;
   }
+}
+
+/* Open country: the bounty so far, and an arrow toward the nearest gang. */
+.tally {
+  position: absolute;
+  left: 50%;
+  /* Under the pause button. */
+  top: 38px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font-family: var(--hud);
+  font-size: clamp(12px, 1.7vw, 15px);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--paper);
+  text-shadow: 0 2px 0 var(--ink);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.tally b {
+  font-family: var(--display);
+  font-size: clamp(18px, 3vw, 28px);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  color: var(--gold);
+}
+.compass {
+  position: absolute;
+  left: 50%;
+  bottom: 26%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px 6px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 72%, transparent);
+  font-family: var(--hud);
+  font-size: clamp(13px, 1.9vw, 16px);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--paper);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.compass i {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  background: var(--ember);
+  clip-path: polygon(50% 0, 88% 100%, 50% 74%, 12% 100%);
+}
+/* Rabble on the right-hand bar: a name and a health bar, nothing else. */
+.side.minor .row,
+.side.minor .awaken,
+.side.minor .ready {
+  display: none;
+}
+
+/* A small pick-one row: the difficulty. */
+#ui .seg {
+  flex: 1 1 70px;
+  min-height: 38px;
+  padding: 4px 10px;
+  font-family: var(--display);
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  background: transparent;
+  border: 2px solid var(--ink);
+}
+#ui .seg[aria-pressed="true"] {
+  color: var(--paper);
+  background: var(--ink);
+}
+/* A line under a button's name saying what it starts. */
+#ui .btn small {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--hud);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  opacity: 0.85;
 }

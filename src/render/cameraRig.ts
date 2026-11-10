@@ -1,6 +1,7 @@
 import { Camera } from "@babylonjs/core/Cameras/camera";
 import type { TargetCamera } from "@babylonjs/core/Cameras/targetCamera";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector";
+import { isUp, targetOf } from "../sim/match";
 import type { Match } from "../sim/types";
 import { angleDiff } from "../sim/vec";
 import type { Rig } from "./rig";
@@ -8,6 +9,9 @@ import type { Rig } from "./rig";
 // The duel camera sits behind the player's shoulder and frames both fighters,
 // pulling back as they separate. It needs no mouse: movement is relative to the
 // opponent, so "forward" always means "toward them".
+//
+// With nobody to fight it becomes a follow camera: behind the hero, turning to
+// look where they are heading. The hero then runs where the camera points.
 
 export type CameraMode = "duel" | "attract";
 
@@ -24,6 +28,11 @@ export class CameraRig {
 
   constructor(private camera: TargetCamera) {}
 
+  /** The way the camera is facing on the ground. With nobody to fight, "forward" means this. */
+  get heading(): number {
+    return this.yaw;
+  }
+
   /** Starts a new shot from a high, wide establishing position. */
   establish(): void {
     this.pos.set(-18, 22, -46);
@@ -37,9 +46,18 @@ export class CameraRig {
     this.camera.fovMode = aspect < 1 ? Camera.FOVMODE_HORIZONTAL_FIXED : Camera.FOVMODE_VERTICAL_FIXED;
   }
 
-  update(dt: number, m: Match, rigs: [Rig, Rig], shake: number, view: number): void {
-    const me = rigs[view].root.position;
-    const them = rigs[1 - view].root.position;
+  update(dt: number, m: Match, rigs: Rig[], shake: number, view: number): void {
+    const hero = m.fighters[view];
+    const foe = targetOf(m, hero);
+    let me = rigs[view].root.position;
+    // With nobody to face, aim at a point ahead so the framing maths below still has two ends.
+    let them = foe ? rigs[foe.id].root.position : me;
+    if (m.standoff) {
+      // A standoff is framed from its first fighter's side, whoever is watching.
+      const seat = m.standoff.ids[0] === view ? 0 : m.standoff.ids[1] === view ? 1 : 0;
+      me = rigs[m.standoff.ids[seat]].root.position;
+      them = rigs[m.standoff.ids[1 - seat]].root.position;
+    }
     const want = this.wantPos;
     const look = this.wantLook;
     let rate = 7;
@@ -112,7 +130,7 @@ export class CameraRig {
       }
     } else if (m.phase === "verdict") {
       // Low behind the beaten fighter, looking up at the one deciding.
-      const loser = rigs[1 - m.winner].root.position;
+      const loser = rigs[m.loser].root.position;
       const winner = rigs[m.winner].root.position;
       const dx = winner.x - loser.x;
       const dz = winner.z - loser.z;
@@ -140,7 +158,7 @@ export class CameraRig {
       lookRate = 4;
     } else if (m.phase === "ko" || m.phase === "done") {
       this.cinePhase = -1;
-      const loser = rigs[1 - m.winner].root.position;
+      const loser = rigs[m.loser].root.position;
       const winner = rigs[m.winner].root.position;
       if (m.phase === "ko" && m.phaseT < 85) {
         this.orbit += dt * 0.5;
@@ -156,6 +174,24 @@ export class CameraRig {
         look.set(winner.x, winner.y + 1.35, winner.z);
         rate = 3;
         fov = 0.8;
+      }
+    } else if (!foe) {
+      // Nobody to fight: follow from behind, and swing round to look where the hero is going.
+      this.cinePhase = -1;
+      const moving = Math.hypot(hero.vel.x, hero.vel.z) > 1 || hero.state === "chase";
+      const turn = angleDiff(hero.yaw, this.yaw);
+      // Running toward the camera does not spin it round: you can back away from something and keep it in view.
+      if (moving && Math.abs(turn) < 2.3) this.yaw += turn * (1 - Math.exp(-1.7 * dt));
+      const fx = Math.sin(this.yaw);
+      const fz = Math.cos(this.yaw);
+      want.set(me.x - fx * 9, me.y + 3.6, me.z - fz * 9);
+      look.set(me.x + fx * 5, me.y + 1.3, me.z + fz * 5);
+      rate = 5;
+      lookRate = 8;
+      if (hero.state === "chase") fov = 1.1;
+      if (m.phase === "intro") {
+        rate = 2.4;
+        lookRate = 5;
       }
     } else {
       this.cinePhase = -1;
@@ -174,8 +210,14 @@ export class CameraRig {
       const swing = 0.3 + 0.42 * near * near * (3 - 2 * near);
       const cs = Math.cos(swing);
       const sn = Math.sin(swing);
-      const back = Math.min(30, Math.max(5.4, 4.6 + sep * 0.34));
-      const height = 1.7 + 0.5 * near + sep * 0.1 + Math.max(0, them.y - me.y) * 0.12;
+      // A crowd needs more room in the frame than one rival does.
+      let crowd = 0;
+      for (const g of m.fighters) {
+        if (g.team !== hero.team && g.awake && isUp(g) && Math.hypot(g.pos.x - hero.pos.x, g.pos.z - hero.pos.z) < 14) crowd++;
+      }
+      const wide = Math.min(1, Math.max(0, crowd - 1) / 4);
+      const back = Math.min(30, Math.max(5.4, 4.6 + sep * 0.34)) + wide * 3.5;
+      const height = 1.7 + 0.5 * near + sep * 0.1 + Math.max(0, them.y - me.y) * 0.12 + wide * 2.2;
       // Right of forward is (fz, -fx).
       want.set(me.x - fx * cs * back + fz * sn * back, me.y + height, me.z - fz * cs * back - fx * sn * back);
       const k = 0.5 + 0.1 * (1 - near);

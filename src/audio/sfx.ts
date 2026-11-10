@@ -164,9 +164,11 @@ export class Sfx {
         } else if (e.kind === "quick" || e.kind === "coup") {
           this.gun(2);
           this.ricochet();
-        } else if (e.kind === "rivet") {
-          this.burst(0.05, 1500, 2, 0.4, "bandpass");
-          this.tone(380, 160, 0.06, 0.3, "square");
+        } else if (e.kind === "rivet" || e.kind === "sentry") {
+          // The sentry's rivets are the same shot, quieter: it is a machine doing a job.
+          const v = e.kind === "sentry" ? 0.55 : 1;
+          this.burst(0.05, 1500, 2, 0.4 * v, "bandpass");
+          this.tone(380, 160, 0.06, 0.3 * v, "square");
         } else {
           this.gun(e.kind === "fan" ? 0.6 : 1);
         }
@@ -188,19 +190,42 @@ export class Sfx {
         break;
       case "zoneSpawn":
         // A rising note for as long as the fuse burns.
-        this.tone(e.kind === "gas" ? 160 : 220, e.kind === "gas" ? 240 : 660, Math.max(0.15, e.fuse / 60), 0.16, "triangle");
+        this.tone(220, 660, Math.max(0.15, e.fuse / 60), 0.16, "triangle");
         break;
       case "zoneErupt":
         if (e.kind === "storm") {
           this.tone(170, 26, 0.8, 0.95);
           this.burst(0.7, 3000, 0.5, 0.7, "lowpass", 80);
           this.burst(0.25, 7000, 1.5, 0.4, "highpass");
-        } else if (e.kind === "gas") {
-          this.burst(0.7, 1800, 0.8, 0.35, "bandpass", 500);
         } else {
           this.tone(300, 60, 0.4, 0.6);
           this.tone(660, 990, 0.35, 0.2, "triangle");
         }
+        break;
+      case "turretUp":
+        // Legs out, barrel up: three clanks.
+        for (let i = 0; i < 3; i++) this.tick(700 + i * 260, 0.3, i * 0.07);
+        this.tone(140, 320, 0.3, 0.25, "sawtooth");
+        break;
+      case "turretDown":
+        this.tone(320, 90, 0.35, 0.25, "sawtooth");
+        break;
+      case "arc":
+        this.tone(2800, 400, 0.12, 0.3, "sawtooth");
+        this.burst(0.1, 7500, 2, 0.3, "highpass");
+        break;
+      case "down":
+        // One of the crew, leaving.
+        this.tone(150, 40, 0.3, 0.6);
+        this.burst(0.18, 900, 0.8, 0.45, "lowpass");
+        break;
+      case "alert":
+        this.tone(660, 990, 0.16, 0.3, "square");
+        this.tone(990, 990, 0.2, 0.22, "square", 0.14);
+        break;
+      case "callOut":
+        this.twang(98);
+        this.twang(147, 0.3);
         break;
       case "enderShot":
         this.gun(1.5);

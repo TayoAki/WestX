@@ -17,6 +17,9 @@ where I found none, the table says so.
 | **Monster Hunter Wilds** | 10 million in its first month | Deep combat with very different kits, in a seamless world. |
 | **Elden Ring** | 28.6 million by December 2024 | An open world built around demanding combat and build variety. |
 | **Breath of the Wild** | No sales figure searched | Terrain made of hills and peaks that pull the eye to the next point of interest, with those points placed in sight of each other. |
+| **Pokémon Scarlet and Violet**, **Palworld** | Named by you; no figure searched | Fights start in the open world, where you meet them, with no cut to a separate battle screen. Set-piece fights still get a stage of their own. |
+| **Super Smash Bros.** | Named by you; no figure searched | Damage does not just drain a bar: the more hurt a fighter is, the further the next hit throws them. |
+| **Roco Kingdom** | Named by you; not researched | Listed so it is not forgotten. I have not checked how its fights work. |
 
 ## Seven rules they share
 
@@ -41,21 +44,19 @@ understands beats ten that need a chart.
 
 | Rule | Status | In WestX |
 |---|---|---|
-| 1. Three roles | **Built** | The witch owns the ground with area attacks. The engineer owns conditions. The lawman is the balance: solid everywhere, no setup needed. |
-| 2. Conditions react | **Built** | Two different conditions on one fighter burn off together in an **overload**. |
+| 1. Three roles | **Built** | The witch owns the ground, from far away. The engineer builds machines and fights close. The lawman is the balance: solid everywhere, no setup needed. |
+| 2. Conditions react | **Built** | Two different conditions on one fighter burn off together in an **overload**, and the burst catches the crowd around them. |
 | 3. Each has a job | **Built** | **Poison** wears health down. **Shock** stops a fighter, slows them and holds their dashes. **Hex** makes every hit hurt more. |
 | 4. A bar that breaks | **Partly** | Guards break under pressure, and the lawman's thunderclap goes through them. There is no team payoff after the break yet. |
-| 5. Swap | **Not built** | Each duel is one class against one class. |
-| 6. Many enemies | **Not built** | Every fight is one-on-one, which is the worst case for an area-attack class. |
-| 7. The world | **Not built** | One open arena. |
+| 5. Swap | **Not built** | You play one class per run. |
+| 6. Many enemies | **Built** | Gangs of four to six rabble around a leader. One swing hits everyone in reach, the hurt fly further, and each class has its own answer to a crowd. |
+| 7. The world | **Started** | One open field with three camps you can see from a distance, a compass to the nearest, and fights that start where you stand. No terrain, no town. |
 
-Rules 5, 6 and 7 are the gap between this prototype and the games in the table.
+Rules 5 and 7 are the gap between this prototype and the games in the table.
 
 ## What to build next, in order
 
-1. **Group fights.** A gang of weak enemies around one strong one. This is the rule
-   the three classes are most starved of: the witch's circles and the engineer's gas
-   are built for crowds and have only ever had one target.
+1. ~~**Group fights.**~~ Built. A gang of weak enemies around one strong one.
 2. **The posse.** All three classes in one fight, swapping between them, so one
    character's condition can be another's overload.
 3. **The first region.** One canyon and one town, with bounties that send you to

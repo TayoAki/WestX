@@ -74,14 +74,15 @@ tools/        smoke.mjs, shot.mjs, build-page.mjs
 
 | Checked here | How |
 |---|---|
-| Every combat rule | 90 automated tests |
-| Whole matches run to a knockout with no broken state | 24 AI-versus-AI matches per test run |
-| The built game boots, starts a duel and takes keyboard input | Headless-browser smoke test |
+| Every combat rule, for duels and for crowds | 119 automated tests |
+| Whole duels run to a knockout with no broken state | 72 AI-versus-AI duels per test run |
+| The open field can be played through, start to finish, by every class | 9 AI runs per test run; the AI hero clears 5 of them |
+| The built game boots, starts a duel, takes keyboard input, then starts open country and walks | Headless-browser smoke test |
 | Layout on desktop and phone sizes | Screenshots reviewed by me |
 
 | Not checkable from here | Why |
 |---|---|
-| Frame rate on real hardware | No graphics card; the test browser renders in software |
+| Frame rate on real hardware | No graphics card; the test browser renders in software. There, open country with all fifteen rabble on screen costs about a third more per frame than the arena |
 | How the fight feels | Needs a person playing it |
 | Sound | The test browser has no audio output; I have not heard it |
 | Touch controls on a real phone | Emulated only |
