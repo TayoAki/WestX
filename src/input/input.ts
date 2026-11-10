@@ -2,8 +2,9 @@ import { blankInput, BUTTONS, type Button, type InputFrame } from "../sim/types"
 
 // Keyboard, gamepad and touch all feed the same InputFrame.
 // The camera needs no mouse, so the whole game is playable from the keyboard.
-// Movement is relative to the rival: W closes in, S backs off, A and D circle.
-// With nobody to fight it is relative to the camera, which the game fills in as `yaw`.
+// What comes out of here is the stick as the player pushes it: right and up on the screen.
+// The game turns that by the camera before the rules see it, so a push toward the rival
+// on screen closes in on them wherever the camera happens to be.
 
 const KEYS: Record<string, Button> = {
   KeyJ: "strike",

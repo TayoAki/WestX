@@ -114,6 +114,38 @@ const S1_HIT = pose({
 const S2_WIND = mirror(S1_WIND);
 const S2_HIT = mirror(S1_HIT);
 
+// A swing, not a jab. The arm is cocked out wide and back, then carried flat across the body and
+// on past it, with the shoulders turning through. Only the two ends are keyed: the arm is turned
+// about the upright axis between them, so on its way it sweeps the arc a real swing does.
+const SWING_WIND = pose({
+  y: -0.06,
+  spine: [0.04, 0.8, 0],
+  head: [0, -0.55, 0],
+  shR: [0, 0.75, 1.35],
+  elR: [-1.25, 0, 0],
+  shL: [-0.7, 0, -0.35],
+  elL: [-1.35, 0, 0],
+  hipL: [-0.35, 0, -0.12],
+  knL: [0.45, 0, 0],
+  hipR: [0.3, 0, 0.14],
+  knR: [0.45, 0, 0],
+});
+const SWING_THROUGH = pose({
+  y: -0.14,
+  spine: [0.22, -1.0, 0],
+  head: [0, 0.7, 0],
+  shR: [0, -2.55, 1.3],
+  elR: [-0.45, 0, 0],
+  shL: [0.5, 0, -0.65],
+  elL: [-1.1, 0, 0],
+  hipL: [-0.7, 0, -0.12],
+  knL: [0.7, 0, 0],
+  hipR: [0.55, 0, 0.12],
+  knR: [0.3, 0, 0],
+});
+const BACKSWING_WIND = mirror(SWING_WIND);
+const BACKSWING_THROUGH = mirror(SWING_THROUGH);
+
 const S3_HIT = pose({
   y: -0.02,
   spine: [-0.35, 0, 0],
@@ -548,6 +580,69 @@ const ARM_LAUNCH_HIT = mirror(LAUNCH_HIT);
 // The thunderclap winds up low and long, so you can see it coming.
 const CLAP_WIND = pose({ ...mirror(S1_WIND), y: -0.32, spine: [0.45, -0.9, 0], head: [-0.2, 0.7, 0] });
 
+/**
+ * Stepping sideways while facing someone. The leading leg reaches out, the other closes up to
+ * it, and the feet never cross: a boxer's shuffle, with the body low and square to the rival.
+ * `dir` is 1 for a step to the fighter's right and -1 to the left.
+ */
+function strafePose(phase: number, amount: number, dir: number): Pose {
+  const open = 0.5 - 0.5 * Math.cos(phase);
+  const lift = Math.max(0, Math.sin(phase));
+  const lead = 0.16 + 0.42 * open;
+  const trail = 0.1 + 0.2 * (1 - open);
+  const step = pose({
+    y: -0.12 - 0.05 * open,
+    spine: [0.16, IDLE.spine[1], -0.07 * dir],
+    head: [-0.05, IDLE.head[1], 0],
+    shL: [-0.35, 0, -0.42],
+    elL: [-1.25, 0, 0],
+    shR: [-0.35, 0, 0.42],
+    elR: [-1.25, 0, 0],
+    // A positive roll swings a leg out to the right; the leading leg is the one on the side we are going.
+    hipR: [-0.12, 0, dir > 0 ? lead : trail],
+    knR: [0.5 + (dir > 0 ? 0.45 * lift : 0.25 * (1 - lift)), 0, 0],
+    hipL: [-0.12, 0, dir > 0 ? -trail : -lead],
+    knL: [0.5 + (dir > 0 ? 0.25 * (1 - lift) : 0.45 * lift), 0, 0],
+  });
+  return blend(IDLE, step, amount);
+}
+
+/** Backing away while facing someone: short steps, weight back, hands up. */
+function backPose(phase: number, amount: number): Pose {
+  const s = Math.sin(-phase);
+  const back = pose({
+    y: -0.09,
+    spine: [0.02, s * 0.08, 0],
+    head: [0.05, IDLE.head[1] * 0.5, 0],
+    shL: [-0.3 + 0.25 * s, 0, -0.3],
+    elL: [-1.3, 0, 0],
+    shR: [-0.3 - 0.25 * s, 0, 0.3],
+    elR: [-1.3, 0, 0],
+    hipL: [-0.45 * s + 0.1, 0, -0.06],
+    knL: [0.45 + 0.5 * Math.max(0, Math.sin(-phase + 1.2)), 0, 0],
+    hipR: [0.45 * s + 0.1, 0, 0.06],
+    knR: [0.45 + 0.5 * Math.max(0, Math.sin(-phase + Math.PI + 1.2)), 0, 0],
+  });
+  return blend(IDLE, back, amount);
+}
+
+/**
+ * The pose for moving over the ground. Which one depends on where the fighter is going against
+ * where they are facing: ahead is a run, behind is a backpedal, and to the side is a shuffle.
+ */
+function movePose(f: Fighter, phase: number, speed: number): Pose {
+  const amount = Math.min(1, speed / 5);
+  const fx = Math.sin(f.yaw);
+  const fz = Math.cos(f.yaw);
+  const ahead = f.vel.x * fx + f.vel.z * fz;
+  const across = f.vel.x * fz - f.vel.z * fx;
+  const total = Math.hypot(ahead, across);
+  if (total < 0.5) return runPose(phase, amount);
+  const straight = ahead >= 0 ? runPose(phase, amount) : backPose(phase, amount);
+  const side = Math.abs(across) / total;
+  return side < 0.05 ? straight : blend(straight, strafePose(phase, amount, Math.sign(across)), Math.min(1, side * side * 1.6));
+}
+
 function runPose(phase: number, amount: number): Pose {
   const s = Math.sin(phase);
   const run = pose({
@@ -567,6 +662,16 @@ function runPose(phase: number, amount: number): Pose {
 }
 
 /** Wind-up into a held hit pose, then ease back out. */
+/**
+ * A swing: wound up until just before it lands, then thrown at its far end. The rig eases toward
+ * whatever pose it is given, so the arm is passing the target as the hit comes out, and still moving.
+ */
+function swing(wind: Pose, through: Pose, mf: number, activeFrom: number, total: number): Pose {
+  if (mf < activeFrom - 2) return wind;
+  if (mf < total - 7) return through;
+  return blend(through, IDLE, (mf - (total - 7)) / 7);
+}
+
 function strike(wind: Pose, hit: Pose, mf: number, activeFrom: number, total: number): Pose {
   if (mf < activeFrom - 1) return wind;
   if (mf < total - 8) return hit;
@@ -617,7 +722,7 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
         break;
       }
       if (!f.grounded) res.pose = f.vel.y > 2 ? JUMP : FALL;
-      else res.pose = runPose(clock.phase, Math.min(1, speed / 5));
+      else res.pose = movePose(f, clock.phase, speed);
       if (clock.brace > 0 && f.kit === "hunter") {
         res.pose = BRACE_GUARD;
         res.rate = 50;
@@ -638,15 +743,19 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
       const from = mv && mv.hits.length ? mv.hits[0].from : 6;
       switch (f.move) {
         case "s1":
+          res.pose = strike(S1_WIND, S1_HIT, f.mf, from, mv!.total);
+          break;
+        // The pistol-whip, the wrench and a thug's haymaker are swings with the right arm...
         case "w1":
         case "e1":
         case "g1":
-          res.pose = strike(S1_WIND, S1_HIT, f.mf, from, mv!.total);
+          res.pose = swing(SWING_WIND, SWING_THROUGH, f.mf, from, mv!.total);
           break;
+        // ...and the backhand that follows comes back the other way with the left.
         case "a2":
         case "e2":
         case "g2":
-          res.pose = strike(S2_WIND, S2_HIT, f.mf, from, mv!.total);
+          res.pose = swing(BACKSWING_WIND, BACKSWING_THROUGH, f.mf, from, mv!.total);
           break;
         case "h1":
         case "h2":
@@ -746,7 +855,7 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
     case "guard":
       if (f.kit === "hunter") {
         // Walking behind the brace: the legs keep their stride, the arms hold the wall.
-        const legs = runPose(clock.phase, Math.min(1, speed / 3) * 0.7);
+        const legs = movePose(f, clock.phase, speed * 1.2);
         res.pose = { ...BRACE_GUARD, hipL: legs.hipL, knL: legs.knL, hipR: legs.hipR, knR: legs.knR };
         if (speed < 0.5) res.pose = BRACE_GUARD;
       } else res.pose = GUARD;

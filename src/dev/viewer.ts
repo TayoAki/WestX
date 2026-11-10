@@ -9,7 +9,7 @@ import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh";
 import type { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import { Scene } from "@babylonjs/core/scene";
 import "@babylonjs/loaders/glTF/2.0";
-import { loadSheriff, ModelBody } from "../render/model";
+import { loadModels, ModelBody } from "../render/model";
 import { choosePose, JOINTS, type Pose, type RigClock } from "../render/poses";
 import { ModelSkin } from "../render/skin";
 import { createMatch } from "../sim/match";
@@ -18,6 +18,7 @@ import type { FState, MoveId } from "../sim/types";
 // A bare page for looking at a character model, in any of the game's poses.
 //
 //   viewer.html                 the prepared sheriff, shaded and posed as the game does it
+//   viewer.html?model=witch     the prepared witch, the same way
 //   viewer.html?file=some.glb   a model exactly as it came from the generator (a path the dev server can serve)
 //
 // Run `npm run dev` and open it there. It is not part of the built game.
@@ -87,7 +88,7 @@ function info(): unknown {
 
 /** Puts the model into one of the game's poses, by name, through the same code the game uses. */
 function pose(name: string): void {
-  const m = createMatch(1, { kits: ["hunter", "outlaw"], opening: false });
+  const m = createMatch(1, { kits: [params.get("model") === "witch" ? "witch" : "hunter", "outlaw"], opening: false });
   m.phase = "fight";
   const f = m.fighters[0];
   const clock: RigClock = { phase: 0, time: 1, tumble: 0, recoil: 0, brace: 0 };
@@ -102,7 +103,15 @@ function pose(name: string): void {
   };
   if (name === "run1") (speed = 6.5), (clock.phase = 1.2);
   else if (name === "run2") (speed = 6.5), (clock.phase = 4.3);
+  else if (name === "side1") (speed = 6), (clock.phase = 1.2), (f.vel.x = 6);
+  else if (name === "side2") (speed = 6), (clock.phase = 3.1), (f.vel.x = 6);
+  else if (name === "side3") (speed = 6), (clock.phase = 3.1), (f.vel.x = -6);
+  else if (name === "back1") (speed = 5), (clock.phase = 1.4), (f.vel.z = -5);
+  else if (name === "back2") (speed = 5), (clock.phase = 4.5), (f.vel.z = -5);
   else if (name === "whip") attack("w1", 7);
+  else if (name === "pulse") attack("h1", 8);
+  else if (name === "circle") attack("circle", 4);
+  else if (name === "chant") state("steady");
   else if (name === "backhand") attack("a2", 9);
   else if (name === "blast") attack("armBlast", 13);
   else if (name === "clap") attack("thunderclap", 20);
@@ -131,7 +140,9 @@ async function start(): Promise<void> {
     skin = new ModelSkin(res.meshes[0] as unknown as TransformNode);
     api.missing = skin.missing;
   } else {
-    body = new ModelBody(scene, await loadSheriff(scene), 0, { height: 2, flip: !params.has("asmade") });
+    const kit = params.get("model") === "witch" ? "witch" : "hunter";
+    const asset = await new Promise<Parameters<Parameters<typeof loadModels>[1]>[1]>((done) => loadModels(scene, (k, a) => k === kit && done(a)));
+    body = new ModelBody(scene, asset, 0, { aura: kit === "witch" ? "#c77dff" : "#ffd24a" });
     api.meshes = body.root.getChildMeshes(false);
     (api as unknown as { body: ModelBody }).body = body;
   }

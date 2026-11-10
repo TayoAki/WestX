@@ -35,7 +35,9 @@ isn't fun here, nothing built on top will save it.
 ### Phase 1: what exists
 
 - Three playable classes: the lawman, the witch and the engineer, plus a quick outlaw as a rival
-- The lawman's body is a real character model, the sheriff, moved by the game's own poses
+- The lawman and the witch are real character models, moved by the game's own poses
+- A side-on fight camera: the fighters face each other across the screen
+- Strikes that are swings, with a trail off the hand; a side-step and a backpedal for moving while facing a rival
 - Open country: one field, three gangs camped in it, and a fight wherever you meet one
 - Crowd fights: one swing hits everyone in reach, rabble fly further the more they are hurt, and they take turns
 - Gang leaders who call the hero out to a standoff and a duel once their crew is beaten
@@ -60,8 +62,10 @@ isn't fun here, nothing built on top will save it.
 
 ### Phase 1: what is missing or unproven
 
-- The art is placeholder, except the sheriff. The witch, the engineer, the outlaw, the
-  crews and the whole landscape are still simple shapes.
+- The art is placeholder, except the sheriff and the witch. The engineer, the outlaw,
+  the crews and the whole landscape are still simple shapes.
+- The side-on camera is new and unplayed. It reads fights well up close; whether it
+  works at long range, and for aiming, needs a person.
 - The animation is generated from key poses made for a stick figure. On the sheriff it
   reads as stiff, her coat is rigid, and a leg can pass through it. Real animation
   clips are the next step for her.

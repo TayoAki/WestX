@@ -26,7 +26,7 @@ export interface ResultStats {
 export type StartMode = "duel" | "training" | "roam";
 
 /** Controls every class shares, shown under each class's own list. */
-const SHARED_MOVES = `<li><kbd>W A S D</kbd> Move. Facing someone, W closes in and A and D circle. Facing nobody, you run where you point</li><li><kbd>Space</kbd> Jump <kbd>R</kbd> Ultimate <kbd>F</kbd> Awaken <kbd>T</kbd> Next target</li>`;
+const SHARED_MOVES = `<li><kbd>W A S D</kbd> Move the way you see it. In a fight you are watched from the side: push toward your rival to close in, up or down the screen to circle them</li><li><kbd>Space</kbd> Jump <kbd>R</kbd> Ultimate <kbd>F</kbd> Awaken <kbd>T</kbd> Next target</li>`;
 const SHARED_NOTES = `<p class="fine"><b>Open country.</b> Walk into a camp and the fight starts where you stand. The crew come a few at a time, and fly further the more you hurt them. Beat them and their leader calls you out.</p><p class="fine"><b>The standoff.</b> Every duel opens with one. Wait for the bell, then shoot first.</p>`;
 const SHARED_LEGEND = `<span><kbd>Space</kbd>jump</span><span><kbd>R</kbd>ultimate</span><span><kbd>F</kbd>awaken</span><span><kbd>T</kbd>target</span><span><kbd>H</kbd>hide</span>`;
 

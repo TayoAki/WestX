@@ -14,8 +14,11 @@ two kinds of fight:
 
 It exists to answer one question: does the fighting feel right?
 
-The **Lawman** is played as the sheriff, a character model generated in Tripo and
-prepared for the game. Everyone else is still drawn from placeholder shapes.
+The **Lawman** is played as the sheriff and the **Witch** as the hooded one: character
+models generated in Tripo and prepared for the game. Everyone else is still drawn from
+placeholder shapes.
+
+A fight is watched from the side, so you see your own fighter and not their back.
 
 | Class | What it owns |
 |---|---|
@@ -45,7 +48,7 @@ The menu shows each class's full move list. These are shared:
 
 | Action | Keyboard | Gamepad |
 |---|---|---|
-| Move. Facing someone: W closes in, S backs off, A and D circle. Facing nobody: you run where you point | W A S D | Left stick |
+| Move the way you see it. A fight is watched from the side: push toward your rival to close in, up or down the screen to circle | W A S D | Left stick |
 | Strike | J | X |
 | Shot; hold for the class's held shot | K | Y |
 | Hold steady, chant or build pressure | Q | Left trigger |
@@ -101,13 +104,18 @@ npm run model -- sheriff-from-tripo.glb src/assets/models/sheriff --keep tripo_p
 
 That is the command the sheriff was made with. It packs every part's texture into
 one image, welds the parts into one mesh, and drops what cel shading does not use.
-Hers went from 8.2 MB in 34 pieces to 2.4 MB in two. `--keep` leaves a part separate
+Hers went from 8.2 MB in 34 pieces to 2.4 MB in two. The witch arrived as one piece
+and needed only `--atlas 3072 --cell 3072`. `--keep` leaves a part separate
 so the game can hide it (her holstered gun); `--stiffen` hangs a long coat from the
 hips so a wide stance does not tear it.
 
 To look at a model in any of the game's poses, run `npm run dev` and open
-`/viewer.html` for the prepared sheriff, or `/viewer.html?file=path/to/raw.glb` for a
-file exactly as it came.
+`/viewer.html` for the prepared sheriff, `/viewer.html?model=witch` for the witch, or
+`/viewer.html?file=path/to/raw.glb` for a file exactly as it came.
+
+A new model is given to a class in one place: the table at the top of
+`src/render/model.ts`. The models are bundled into the game's one script, which is
+now about 10 MB. A third or fourth will need them shipped as separate files.
 
 ## The plan
 

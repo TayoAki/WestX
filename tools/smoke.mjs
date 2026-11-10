@@ -30,13 +30,14 @@ if (!(await wait(() => window.__westx.mode === "training" && window.__westx.matc
 // The lawman is played as the sheriff: her model must have loaded and be the body on screen.
 if (!(await wait(() => !!window.__westx.rigs[0].body, null, 30000))) await fail("the sheriff's model did not load onto the lawman");
 
-await page.keyboard.down("KeyW");
+// A fight is watched from the side with the player on the left, so right is toward the rival.
+await page.keyboard.down("KeyD");
 const close = await wait(() => {
   const [a, b] = window.__westx.match.fighters;
   return Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z) < 3;
 });
-await page.keyboard.up("KeyW");
-if (!close) await fail("W did not move the hunter toward the rival");
+await page.keyboard.up("KeyD");
+if (!close) await fail("D did not move the lawman toward the rival");
 
 let landed = false;
 for (let i = 0; i < 40 && !landed; i++) {
@@ -48,9 +49,23 @@ if (!landed) await fail("J did not land a strike");
 await page.keyboard.press("Escape");
 if (!(await wait(() => window.__westx.paused === true, null, 5000))) await fail("Escape did not pause");
 
+// Up the screen circles the rival: after a moment of it, the two are still about as far apart.
+const apart = () => page.evaluate(() => { const [a, b] = window.__westx.match.fighters; return Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z); });
+await page.keyboard.press("Escape");
+const from = await apart();
+await page.keyboard.down("KeyW");
+await page.waitForTimeout(900);
+await page.keyboard.up("KeyW");
+const to = await apart();
+if (Math.abs(to - from) > 1.5) await fail(`W did not circle the rival: the gap went from ${from.toFixed(1)} to ${to.toFixed(1)}`);
+await page.keyboard.press("Escape");
+
+// Open country, as the witch: her model has to load too.
 await page.click('[data-el="quit"]');
+await page.click('[data-kit="witch"]');
 await page.click('[data-start="roam"]');
 if (!(await wait(() => window.__westx.mode === "roam" && window.__westx.match.phase === "fight"))) await fail("open country did not start");
+if (!(await wait(() => !!window.__westx.rigs[0].body, null, 30000))) await fail("the witch's model did not load");
 const cast = await page.evaluate(() => {
   const m = window.__westx.match;
   return { fighters: m.fighters.length, rigs: window.__westx.rigs.length, leaders: m.fighters.filter((f) => f.rank === "named").length };

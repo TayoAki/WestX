@@ -7,7 +7,7 @@ export default defineConfig({
   assetsInclude: ["**/*.glb"],
   build: {
     target: "es2022",
-    chunkSizeWarningLimit: 8000,
+    chunkSizeWarningLimit: 16000,
     rollupOptions: {
       output: {
         // One script file: the single-page build publishes it beside the page.

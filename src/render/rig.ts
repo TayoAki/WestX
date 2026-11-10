@@ -9,12 +9,14 @@ import { CreateDisc } from "@babylonjs/core/Meshes/Builders/discBuilder";
 import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
 import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
+import { TrailMesh } from "@babylonjs/core/Meshes/trailMesh";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode";
 import "@babylonjs/core/Rendering/outlineRenderer";
 import type { Scene } from "@babylonjs/core/scene";
 import type { KitId } from "../sim/kits";
 import { isUp } from "../sim/match";
-import type { Fighter, Match } from "../sim/types";
+import { MOVES } from "../sim/moves";
+import type { Fighter, Match, MoveId } from "../sim/types";
 import type { ModelBody } from "./model";
 import { choosePose, JOINTS, type Joint, type Pose, type RigClock } from "./poses";
 import { makeGlow, noGlow } from "./stage";
@@ -69,6 +71,18 @@ function shared(scene: Scene) {
 
 const OUTLINE = Color3.FromHexString("#1a1320");
 
+/** Which hand a strike is thrown with, for the trail it leaves. Anything not listed uses both. */
+const RIGHT_HAND: ReadonlySet<MoveId> = new Set<MoveId>(["w1", "e1", "g1", "s1", "enderBlast", "prodBlast", "prodLaunch", "prodSlam"]);
+const LEFT_HAND: ReadonlySet<MoveId> = new Set<MoveId>(["a2", "e2", "g2", "s2", "armBlast", "armLaunch", "armSlam", "thunderclap"]);
+
+/** A ribbon of light that follows a hand, shown while that hand is swinging. */
+interface Trail {
+  /** A point kept at the hand each frame. The ribbon follows this, not the hand, so it is drawn the same on any body. */
+  at: TransformNode;
+  mesh: TrailMesh;
+  shown: number;
+}
+
 export class Rig {
   readonly root: TransformNode;
   private nodes = {} as Record<Joint, TransformNode>;
@@ -90,6 +104,8 @@ export class Rig {
   private barFill: Mesh;
   /** Seconds one of the rabble has been lying where they fell. */
   private gone = 0;
+  /** Swing trails for the right hand and the left. Rabble go without. */
+  private trails: Trail[] = [];
   /** World position of the gun hand, for muzzle flashes and the lasso. */
   hand: TransformNode;
   /** World position of the brace fist, for the hunter's arm effects. */
@@ -279,6 +295,22 @@ export class Rig {
     this.aura.isPickable = false;
     this.aura.setEnabled(false);
 
+    // A trail off each hand, for swings.
+    if (!lite) {
+      for (const side of ["R", "L"]) {
+        const at = new TransformNode(`f${id}-trailAt${side}`, scene);
+        const mesh = new TrailMesh(`f${id}-trail${side}`, at, scene, { diameter: 0.2, length: 11, segments: 11, sections: 4, autoStart: true });
+        const mat = makeGlow(scene, `f${id}-trailMat${side}`, palette.aura, 0.75);
+        mat.alphaMode = 1; // additive
+        mesh.material = mat;
+        mesh.isPickable = false;
+        // It moves every frame; the box it was measured in means nothing.
+        mesh.alwaysSelectAsActiveMesh = true;
+        mesh.setEnabled(false);
+        this.trails.push({ at, mesh, shown: 0 });
+      }
+    }
+
     // A soft shadow on the ground, and a health bar overhead for anyone who is not the hero.
     const mats = shared(scene);
     this.shadow = CreateDisc(`f${id}-shadow`, { radius: 0.72, tessellation: 18 }, scene);
@@ -407,6 +439,21 @@ export class Rig {
       for (const g of this.hipGuns) g.setEnabled(res.holstered);
     }
 
+    // Swing trails: the ribbon always follows the hand, and is lit only while that hand is striking.
+    if (this.trails.length) {
+      const mv = f.state === "attack" && f.move ? MOVES[f.move] : null;
+      const live = !!mv && mv.hits.length > 0 && f.mf >= mv.hits[0].from - 3 && f.mf <= mv.hits[mv.hits.length - 1].to + 4 && !res.hidden;
+      const hands = [this.hand, this.fist];
+      this.trails.forEach((trail, i) => {
+        hands[i].computeWorldMatrix(true);
+        trail.at.position.copyFrom(hands[i].getAbsolutePosition());
+        const mine = live && !(i === 0 ? LEFT_HAND : RIGHT_HAND).has(f.move!);
+        trail.shown += ((mine ? 1 : 0) - trail.shown) * (1 - Math.exp(-(mine ? 40 : 12) * dt));
+        trail.mesh.visibility = trail.shown;
+        trail.mesh.setEnabled(trail.shown > 0.03);
+      });
+    }
+
     // The aura belongs to the supernatural moments. Holding steady is quiet.
     let aura = 0;
     if (f.state === "burst") aura = 0.34;
@@ -428,6 +475,10 @@ export class Rig {
   dispose(): void {
     // The model goes first, on its own terms: its texture is shared with every other copy.
     this.body?.dispose();
+    for (const trail of this.trails) {
+      trail.mesh.dispose(false, true);
+      trail.at.dispose();
+    }
     this.root.dispose(false, true);
     this.shadow.dispose(false, false);
     this.bar.dispose(false, false);

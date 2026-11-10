@@ -2,16 +2,16 @@ import { Sfx } from "./audio/sfx";
 import { Input } from "./input/input";
 import { CameraRig } from "./render/cameraRig";
 import { Fx } from "./render/fx";
-import { loadSheriff, ModelBody, type ModelAsset } from "./render/model";
+import { loadModels, ModelBody, type ModelAsset } from "./render/model";
 import { PropsView } from "./render/propsView";
 import { crewPalette, KIT_PALETTE, Rig } from "./render/rig";
 import { createStage, type Stage } from "./render/stage";
 import { AI, Rabble, type Difficulty } from "./sim/ai";
 import type { KitId } from "./sim/kits";
-import { createMatch, isUp, stepMatch } from "./sim/match";
+import { createMatch, isUp, stepMatch, targetOf } from "./sim/match";
 import { C, MOVES } from "./sim/moves";
 import type { InputFrame, Match, SimEvent } from "./sim/types";
-import { clone, type V3 } from "./sim/vec";
+import { clone, dirOfYaw, normH, rightOf, sub, type V3 } from "./sim/vec";
 import { CLASSES, PLAYABLE } from "./ui/classes";
 import { Hud } from "./ui/hud";
 
@@ -44,8 +44,8 @@ export class Game {
   /** Test hook: when set, replaces the player's input. */
   inputOverride: InputFrame | null = null;
 
-  /** The sheriff's model, once it has loaded. Until then, and if it never does, the lawman is drawn from primitives. */
-  private sheriff: ModelAsset | null = null;
+  /** Character models, as they load. Until one has, and if it never does, its class is drawn from primitives. */
+  private models: Partial<Record<KitId, ModelAsset>> = {};
   /** One mind per fighter. The player's own is null. */
   ais: (AI | Rabble | null)[] = [];
   private acc = 0;
@@ -98,24 +98,20 @@ export class Game {
     });
 
     this.start("attract");
-    loadSheriff(scene).then(
-      (asset) => {
-        this.sheriff = asset;
-        this.dress();
-      },
-      (e) => console.warn("The sheriff's model did not load; the lawman stays as drawn.", e),
-    );
+    loadModels(scene, (kit, asset) => {
+      this.models[kit] = asset;
+      this.dress();
+    });
   }
 
-  /** Puts the sheriff's model on every lawman who is not wearing it yet. */
+  /** Puts a class's model on every fighter of that class who is not wearing it yet. */
   private dress(): void {
-    if (!this.sheriff) return;
     for (const f of this.match.fighters) {
       const rig = this.rigs[f.id];
-      if (f.kit !== "hunter" || f.rank === "rabble" || rig.body) continue;
-      // She is shown mirrored, so her brass arm is the brace arm and her gun hand is free.
-      // A lawman on the other side wears the same model in a colder light.
-      rig.wear(new ModelBody(this.stage.scene, this.sheriff, f.id, { height: 2, flip: true, tint: f.id === 0 ? undefined : "#c9b4d8" }));
+      const asset = this.models[f.kit];
+      if (!asset || f.rank === "rabble" || rig.body) continue;
+      // Someone on the other side wears the same model in a colder light, so the two can be told apart.
+      rig.wear(new ModelBody(this.stage.scene, asset, f.id, { aura: KIT_PALETTE[f.kit].aura, tint: f.id === 0 ? undefined : "#c9b4d8" }));
     }
   }
 
@@ -252,6 +248,35 @@ export class Game {
     this.hud.setScreen("result", true);
   }
 
+  /**
+   * Turns the stick, which the player pushes by what they see, into what the rules ask for.
+   * The rules move a fighter around their target: toward it, or circling it.
+   *
+   * A fight is watched from the side, so across the screen is toward the rival or away, and
+   * up and down the screen is round them. That is applied exactly, not worked out from where
+   * the camera happens to be this instant: the camera trails the fighters, and steering by a
+   * trailing camera turns a circle into a spiral.
+   *
+   * With nobody to face, the rules take the camera's heading and do the turning themselves.
+   */
+  private steer(raw: InputFrame): InputFrame {
+    const heading = this.cam.heading;
+    const hero = this.match.fighters[0];
+    const target = targetOf(this.match, hero);
+    if (!target) return { ...raw, yaw: heading };
+    // `tilt` stays as pushed: up the screen launches, down slams, whichever side the fight is seen from.
+    const side = this.cam.fightSide;
+    if (side !== 0) return { ...raw, my: raw.mx * side, mx: -raw.my * side, yaw: heading };
+    // Some other shot is on screen (a standoff, a verdict): fall back on the camera as it stands.
+    const up = dirOfYaw(heading);
+    const across = rightOf(up);
+    const wx = across.x * raw.mx + up.x * raw.my;
+    const wz = across.z * raw.mx + up.z * raw.my;
+    const toward = normH(sub(target.pos, hero.pos), dirOfYaw(hero.yaw));
+    const round = rightOf(toward);
+    return { ...raw, my: wx * toward.x + wz * toward.z, mx: wx * round.x + wz * round.z, yaw: heading };
+  }
+
   private step(): void {
     const m = this.match;
     const inputs: InputFrame[] = [];
@@ -260,11 +285,7 @@ export class Game {
       const ai = this.ais[f.id];
       if (ai) inputs[f.id] = ai.think(m);
     }
-    if (!this.ais[0]) {
-      // With nobody to face, the player runs where the camera points.
-      const own = this.inputOverride ?? this.input.read();
-      inputs[0] = this.inputOverride ? own : { ...own, yaw: this.cam.heading };
-    }
+    if (!this.ais[0]) inputs[0] = this.inputOverride ?? this.steer(this.input.read());
     if (m.phase === "fight") this.stats.fightTicks++;
     for (const e of stepMatch(m, inputs)) this.handle(e);
 

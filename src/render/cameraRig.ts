@@ -6,12 +6,15 @@ import type { Match } from "../sim/types";
 import { angleDiff } from "../sim/vec";
 import type { Rig } from "./rig";
 
-// The duel camera sits behind the player's shoulder and frames both fighters,
-// pulling back as they separate. It needs no mouse: movement is relative to the
-// opponent, so "forward" always means "toward them".
+// A fight is watched from the side, the way a stage is: the two fighters face each
+// other across the screen, and the player sees their own fighter, not the back of
+// their head. The camera pulls back as they separate and needs no mouse.
 //
 // With nobody to fight it becomes a follow camera: behind the hero, turning to
-// look where they are heading. The hero then runs where the camera points.
+// look where they are heading.
+//
+// Either way the player steers by what is on screen. `heading` is the way the
+// camera is looking, and the game turns the stick by it.
 
 export type CameraMode = "duel" | "attract";
 
@@ -23,27 +26,46 @@ export class CameraRig {
   private fov = 0.95;
   private orbit = 0.6;
   private cinePhase = -1;
+  /** Which side of the line between the fighters the camera stands on: 1 is the player's right. */
+  private side = 1;
+  /** True while the side-on fight shot is the one in use. */
+  private framing = false;
+  /** Half the width of the view, as a tangent: how far back the camera must be to fit a given span. */
+  private tanH = 0.9;
   private wantPos = new Vector3();
   private wantLook = new Vector3();
 
   constructor(private camera: TargetCamera) {}
 
-  /** The way the camera is facing on the ground. With nobody to fight, "forward" means this. */
+  /**
+   * While a fight is being watched side-on: 1 if the player's fighter is on the left of the
+   * screen, -1 if on the right. 0 when some other shot is in use.
+   */
+  get fightSide(): number {
+    return this.framing ? this.side : 0;
+  }
+
+  /** The way the camera is looking, on the ground. Up the screen is this way. */
   get heading(): number {
-    return this.yaw;
+    return Math.atan2(this.look.x - this.pos.x, this.look.z - this.pos.z);
   }
 
   /** Starts a new shot from a high, wide establishing position. */
   establish(): void {
-    this.pos.set(-18, 22, -46);
+    // From the side the fight will be watched from: the player's right, so they open on the left of the screen.
+    this.pos.set(26, 20, -30);
     this.look.set(0, 1, 0);
     this.yaw = 0;
+    this.side = 1;
+    this.framing = true;
     this.cinePhase = -1;
   }
 
   resize(aspect: number): void {
     // In portrait, fix the horizontal view so both fighters stay in frame.
     this.camera.fovMode = aspect < 1 ? Camera.FOVMODE_HORIZONTAL_FIXED : Camera.FOVMODE_VERTICAL_FIXED;
+    const half = Math.tan(0.95 / 2);
+    this.tanH = aspect < 1 ? half : half * aspect;
   }
 
   update(dt: number, m: Match, rigs: Rig[], shake: number, view: number): void {
@@ -64,6 +86,8 @@ export class CameraRig {
     let lookRate = 11;
     let cut = false;
     let fov = 0.95;
+    const wasFraming = this.framing;
+    this.framing = false;
 
     if (m.cine) {
       const a = rigs[m.cine.att].root.position;
@@ -195,35 +219,48 @@ export class CameraRig {
       }
     } else {
       this.cinePhase = -1;
+      this.framing = true;
       const dx = them.x - me.x;
       const dz = them.z - me.z;
       const dh = Math.hypot(dx, dz);
-      // Turn toward the opponent smoothly so a slip behind you reads as a whip-pan, not a cut.
-      if (dh > 0.6) this.yaw += angleDiff(Math.atan2(dx, dz), this.yaw) * (1 - Math.exp(-6.5 * dt));
+      const midX = (me.x + them.x) / 2;
+      const midY = (me.y + them.y) / 2;
+      const midZ = (me.z + them.z) / 2;
+      if (dh > 0.6) {
+        const line = Math.atan2(dx, dz);
+        // If the two have swapped ends (a slip behind, a chase straight past), the camera stays
+        // where it is and they swap sides of the screen. Swinging round to follow would spin the view.
+        if (wasFraming && Math.abs(angleDiff(line, this.yaw)) > Math.PI / 2) {
+          this.yaw += Math.PI;
+          this.side = -this.side;
+        }
+        this.yaw += angleDiff(line, this.yaw) * (1 - Math.exp(-6.5 * dt));
+      }
       const fx = Math.sin(this.yaw);
       const fz = Math.cos(this.yaw);
-      const sep = Vector3.Distance(me, them);
-      // Up close the camera swings out to the side so the player does not hide the rival;
-      // at range it settles back behind the shoulder. The swing stays under 45 degrees
-      // so that "toward the rival" always reads as up the screen.
-      const near = 1 - Math.min(1, Math.max(0, (sep - 2.5) / 13));
-      const swing = 0.3 + 0.42 * near * near * (3 - 2 * near);
-      const cs = Math.cos(swing);
-      const sn = Math.sin(swing);
+      if (!wasFraming) {
+        // Coming in from another shot: take whichever side the camera is already on.
+        const across = (this.pos.x - midX) * fz - (this.pos.z - midZ) * fx;
+        if (Math.abs(across) > 1.5) this.side = across > 0 ? 1 : -1;
+      }
       // A crowd needs more room in the frame than one rival does.
       let crowd = 0;
       for (const g of m.fighters) {
         if (g.team !== hero.team && g.awake && isUp(g) && Math.hypot(g.pos.x - hero.pos.x, g.pos.z - hero.pos.z) < 14) crowd++;
       }
       const wide = Math.min(1, Math.max(0, crowd - 1) / 4);
-      const back = Math.min(30, Math.max(5.4, 4.6 + sep * 0.34)) + wide * 3.5;
-      const height = 1.7 + 0.5 * near + sep * 0.1 + Math.max(0, them.y - me.y) * 0.12 + wide * 2.2;
-      // Right of forward is (fz, -fx).
-      want.set(me.x - fx * cs * back + fz * sn * back, me.y + height, me.z - fz * cs * back - fx * sn * back);
-      const k = 0.5 + 0.1 * (1 - near);
-      look.set(me.x + (them.x - me.x) * k, me.y + 1.15 + (them.y - me.y) * k, me.z + (them.z - me.z) * k);
+      // Far enough back to hold both of them, with room at the edges, and one thrown high.
+      const span = Math.max(dh / 2, Math.abs(them.y - me.y) * 0.9) + 2.4 + wide * 2.6;
+      const dist = Math.min(36, Math.max(4.8, span / this.tanH));
+      // Out to the side (right of forward is (fz, -fx)), and a little toward the rival's end,
+      // so that the player's own fighter is seen from the front quarter.
+      const lean = dist * 0.2;
+      want.set(midX + fz * this.side * dist + fx * lean, midY + 1.5 + dist * 0.2 + wide * 1.2, midZ - fx * this.side * dist + fz * lean);
+      look.set(midX, midY + 1.1, midZ);
+      rate = 6;
+      lookRate = 10;
       const state = m.fighters[view].state;
-      if (state === "chase" || state === "blasted" || state === "zip") fov = 1.1;
+      if (state === "chase" || state === "blasted" || state === "zip") fov = 1.05;
       if (m.phase === "intro") {
         rate = 2.4;
         lookRate = 5;

@@ -78,7 +78,8 @@ tools/        smoke.mjs, shot.mjs, build-page.mjs
 | Whole duels run to a knockout with no broken state | 72 AI-versus-AI duels per test run |
 | The open field can be played through, start to finish, by every class | 9 AI runs per test run; the AI hero clears 5 of them |
 | The built game boots, starts a duel, takes keyboard input, then starts open country and walks | Headless-browser smoke test |
-| The sheriff's model loads and is the lawman's body on screen | The same smoke test |
+| The sheriff's and the witch's models load and are the body on screen | The same smoke test |
+| In a fight, across the screen closes on the rival and up the screen circles them at a steady distance | The same smoke test, with real key presses |
 | The model takes each of the game's poses without tearing or turning inside out | Posed in the viewer page and looked at by me, from the front and from behind |
 | Layout on desktop and phone sizes | Screenshots reviewed by me |
 
@@ -101,8 +102,8 @@ onto the model's skeleton.
 | Piece | What it does |
 |---|---|
 | `tools/prep-model.mjs` | Turns a generated model into one mesh and one texture. Run once per model, by hand |
-| `src/render/skin.ts` | Maps the rig's joints to the model's bones, by direction only, so proportions do not matter. Closes the hands |
-| `src/render/model.ts` | Loads a model from inside the script, copies it onto each fighter that wears it, and gives the gun hand a revolver |
+| `src/render/skin.ts` | Maps the rig's joints to the model's bones, by direction only, so proportions do not matter. It measures how the model stands at rest (arms out or half down, palms forward or down) and works from that, so models rigged by different tools both fit. Closes the hands |
+| `src/render/model.ts` | Says which class wears which model. Loads each from inside the script, copies it onto every fighter that wears it, and puts a revolver or a staff in the right hand |
 | `src/render/toon.ts` | A cel shader for a textured, skinned mesh |
 | `viewer.html` | A dev page for looking at a model in any pose |
 
