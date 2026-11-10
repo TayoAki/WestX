@@ -15,12 +15,16 @@ import type { Scene } from "@babylonjs/core/scene";
 import type { KitId } from "../sim/kits";
 import { isUp } from "../sim/match";
 import type { Fighter, Match } from "../sim/types";
+import type { ModelBody } from "./model";
 import { choosePose, JOINTS, type Joint, type Pose, type RigClock } from "./poses";
 import { makeGlow, noGlow } from "./stage";
 import { makeToon } from "./toon";
 
 // A fighter drawn from primitives: capsule limbs, a poncho and a wide-brimmed
 // hat for a silhouette that reads at any distance. Placeholder art, on purpose.
+//
+// A class with a real character model wears it over this rig. The rig goes on
+// working out the poses exactly as before; the model is what gets drawn.
 
 export interface Palette {
   poncho: string;
@@ -87,9 +91,11 @@ export class Rig {
   /** Seconds one of the rabble has been lying where they fell. */
   private gone = 0;
   /** World position of the gun hand, for muzzle flashes and the lasso. */
-  readonly hand: TransformNode;
+  hand: TransformNode;
   /** World position of the brace fist, for the hunter's arm effects. */
-  readonly fist: TransformNode;
+  fist: TransformNode;
+  /** The character model this rig is wearing, if its class has one. */
+  body: ModelBody | null = null;
   readonly auraColor: Color3;
 
   constructor(
@@ -295,6 +301,17 @@ export class Rig {
     this.bar.setEnabled(false);
   }
 
+  /** Dresses the rig in a character model: the primitives are hidden and the model takes their poses. */
+  wear(body: ModelBody): void {
+    for (const mesh of this.root.getChildMeshes(false)) if (mesh !== this.aura) mesh.setEnabled(false);
+    this.body = body;
+    body.root.parent = this.root;
+    this.mats.push(...body.mats);
+    // Effects that start at a hand now start at hers.
+    if (body.handR) this.hand = body.handR;
+    if (body.handL) this.fist = body.handL;
+  }
+
   /** White flash on taking a hit. */
   hit(amount: number): void {
     this.flash = Math.max(this.flash, amount);
@@ -380,8 +397,15 @@ export class Rig {
       const glow = Math.min(1.6, 0.12 + 0.88 * (f.meter / 100) + this.coreFlash + (armed ? 0.6 + Math.sin(clock.time * 40) * 0.2 : 0));
       this.coreMat.emissiveColor.set(0.37 * glow, 0.95 * glow, glow);
     }
-    for (const g of this.handGuns) g.setEnabled(!res.holstered);
-    for (const g of this.hipGuns) g.setEnabled(res.holstered);
+    if (this.body) {
+      // The off hand makes a fist to hit with, and to hold a guard.
+      const fist = f.state === "attack" || f.state === "guard" || f.state === "blockstun" || f.state === "chase";
+      this.body.pose(this.cur, res.spin, this.curY, res.holstered, fist, dt);
+    }
+    else {
+      for (const g of this.handGuns) g.setEnabled(!res.holstered);
+      for (const g of this.hipGuns) g.setEnabled(res.holstered);
+    }
 
     // The aura belongs to the supernatural moments. Holding steady is quiet.
     let aura = 0;
@@ -402,6 +426,8 @@ export class Rig {
 
   /** Removes the fighter from the scene, for when the classes change between matches. */
   dispose(): void {
+    // The model goes first, on its own terms: its texture is shared with every other copy.
+    this.body?.dispose();
     this.root.dispose(false, true);
     this.shadow.dispose(false, false);
     this.bar.dispose(false, false);

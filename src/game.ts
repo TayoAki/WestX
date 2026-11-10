@@ -2,6 +2,7 @@ import { Sfx } from "./audio/sfx";
 import { Input } from "./input/input";
 import { CameraRig } from "./render/cameraRig";
 import { Fx } from "./render/fx";
+import { loadSheriff, ModelBody, type ModelAsset } from "./render/model";
 import { PropsView } from "./render/propsView";
 import { crewPalette, KIT_PALETTE, Rig } from "./render/rig";
 import { createStage, type Stage } from "./render/stage";
@@ -43,6 +44,8 @@ export class Game {
   /** Test hook: when set, replaces the player's input. */
   inputOverride: InputFrame | null = null;
 
+  /** The sheriff's model, once it has loaded. Until then, and if it never does, the lawman is drawn from primitives. */
+  private sheriff: ModelAsset | null = null;
   /** One mind per fighter. The player's own is null. */
   ais: (AI | Rabble | null)[] = [];
   private acc = 0;
@@ -95,6 +98,25 @@ export class Game {
     });
 
     this.start("attract");
+    loadSheriff(scene).then(
+      (asset) => {
+        this.sheriff = asset;
+        this.dress();
+      },
+      (e) => console.warn("The sheriff's model did not load; the lawman stays as drawn.", e),
+    );
+  }
+
+  /** Puts the sheriff's model on every lawman who is not wearing it yet. */
+  private dress(): void {
+    if (!this.sheriff) return;
+    for (const f of this.match.fighters) {
+      const rig = this.rigs[f.id];
+      if (f.kit !== "hunter" || f.rank === "rabble" || rig.body) continue;
+      // She is shown mirrored, so her brass arm is the brace arm and her gun hand is free.
+      // A lawman on the other side wears the same model in a colder light.
+      rig.wear(new ModelBody(this.stage.scene, this.sheriff, f.id, { height: 2, flip: true, tint: f.id === 0 ? undefined : "#c9b4d8" }));
+    }
   }
 
   private toggleMute(): boolean {
@@ -126,6 +148,7 @@ export class Game {
       const leader = m.fighters.find((g) => g.gang === f.gang && g.rank === "named");
       return new Rig(scene, f.id, crewPalette(f.kit, KIT_PALETTE[leader ? leader.kit : "outlaw"]), f.kit, true);
     });
+    this.dress();
     this.fx.setRigs(
       this.rigs,
       m.fighters.filter((f) => f.rank !== "rabble").map((f) => f.id),

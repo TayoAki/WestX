@@ -14,6 +14,9 @@ two kinds of fight:
 
 It exists to answer one question: does the fighting feel right?
 
+The **Lawman** is played as the sheriff, a character model generated in Tripo and
+prepared for the game. Everyone else is still drawn from placeholder shapes.
+
 | Class | What it owns |
 |---|---|
 | **Lawman** | The balance. Hard to move, strong at every range, with a brace that is shield and cannon |
@@ -83,6 +86,28 @@ npm run smoke
 
 `test` runs the combat rules without a browser. `smoke` boots the built game in
 headless Chromium and needs Playwright; run `npm run build` first.
+
+## Character models
+
+A fighter can wear a real character model. The game keeps animating its own simple
+rig and copies each pose onto the model's skeleton, so a new model needs no
+animation files: it needs a humanoid skeleton and a T-pose.
+
+To prepare a model from a generator (a `.glb` with a skeleton):
+
+```bash
+npm run model -- sheriff-from-tripo.glb src/assets/models/sheriff --keep tripo_part_17=gun --stiffen tripo_part_0=0.35 --stiffen tripo_part_1=0.35 --atlas 4096 --cell 2048
+```
+
+That is the command the sheriff was made with. It packs every part's texture into
+one image, welds the parts into one mesh, and drops what cel shading does not use.
+Hers went from 8.2 MB in 34 pieces to 2.4 MB in two. `--keep` leaves a part separate
+so the game can hide it (her holstered gun); `--stiffen` hangs a long coat from the
+hips so a wide stance does not tear it.
+
+To look at a model in any of the game's poses, run `npm run dev` and open
+`/viewer.html` for the prepared sheriff, or `/viewer.html?file=path/to/raw.glb` for a
+file exactly as it came.
 
 ## The plan
 

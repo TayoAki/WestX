@@ -27,6 +27,9 @@ if (!(await page.isVisible('[data-start="duel"]'))) await fail("the menu is not 
 await page.click('[data-start="training"]');
 if (!(await wait(() => window.__westx.mode === "training" && window.__westx.match.phase === "fight"))) await fail("the duel did not start");
 
+// The lawman is played as the sheriff: her model must have loaded and be the body on screen.
+if (!(await wait(() => !!window.__westx.rigs[0].body, null, 30000))) await fail("the sheriff's model did not load onto the lawman");
+
 await page.keyboard.down("KeyW");
 const close = await wait(() => {
   const [a, b] = window.__westx.match.fighters;

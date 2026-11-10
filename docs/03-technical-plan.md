@@ -78,17 +78,48 @@ tools/        smoke.mjs, shot.mjs, build-page.mjs
 | Whole duels run to a knockout with no broken state | 72 AI-versus-AI duels per test run |
 | The open field can be played through, start to finish, by every class | 9 AI runs per test run; the AI hero clears 5 of them |
 | The built game boots, starts a duel, takes keyboard input, then starts open country and walks | Headless-browser smoke test |
+| The sheriff's model loads and is the lawman's body on screen | The same smoke test |
+| The model takes each of the game's poses without tearing or turning inside out | Posed in the viewer page and looked at by me, from the front and from behind |
 | Layout on desktop and phone sizes | Screenshots reviewed by me |
 
 | Not checkable from here | Why |
 |---|---|
-| Frame rate on real hardware | No graphics card; the test browser renders in software. There, open country with all fifteen rabble on screen costs about a third more per frame than the arena |
+| Frame rate on real hardware | No graphics card; the test browser renders in software. There, open country with all fifteen rabble on screen costs about a third more per frame than the arena, and the sheriff's model roughly halves the frame rate again. A software renderer moves every vertex of her mesh on the processor, which a graphics card does not, so this says little about a real device. It needs measuring on one |
 | How the fight feels | Needs a person playing it |
 | Sound | The test browser has no audio output; I have not heard it |
 | Touch controls on a real phone | Emulated only |
 | A physical gamepad | None attached |
 
 These are the things to report back from playing it.
+
+## 4b. Character models
+
+The game has no animation files. It animates a rig of eleven joints from key poses,
+and that stays true with real character models: each frame, the rig's pose is copied
+onto the model's skeleton.
+
+| Piece | What it does |
+|---|---|
+| `tools/prep-model.mjs` | Turns a generated model into one mesh and one texture. Run once per model, by hand |
+| `src/render/skin.ts` | Maps the rig's joints to the model's bones, by direction only, so proportions do not matter. Closes the hands |
+| `src/render/model.ts` | Loads a model from inside the script, copies it onto each fighter that wears it, and gives the gun hand a revolver |
+| `src/render/toon.ts` | A cel shader for a textured, skinned mesh |
+| `viewer.html` | A dev page for looking at a model in any pose |
+
+The model and its texture are bundled into the script as text. That costs about a
+third more download than separate files would, and means the published page fetches
+nothing at run time.
+
+What a generator gets wrong, and what the tool does about it:
+
+- **Dozens of parts, each with its own texture.** Packed into one image and welded into one mesh.
+- **Textures painted for dull, even light.** The shader lifts them to sit beside the game's sunlit colours.
+- **A long coat tied to the legs, and in the sheriff's case to a forearm.** Re-weighted to hang from the hips.
+- **Flat hands.** Fingers are curled in code: a grip on the gun hand, a fist on the other when it is needed.
+
+What it cannot fix: there is no cloth, so a coat is rigid and a leg can pass through
+it; and the poses were made for a stick figure, so they are stiffer than the model
+deserves. Real animation clips are the cure for the second.
 
 ## 5. The open world in a browser
 
