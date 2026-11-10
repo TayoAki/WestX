@@ -28,19 +28,24 @@ npm run build
 | Action | Keyboard | Gamepad |
 |---|---|---|
 | Move: W closes in, S backs off, A and D circle | W A S D | Left stick |
-| Strike; four presses make a string | J | X |
-| Shot; hold then release for a heavy shot | K | Y |
+| Strike: two pistol-whips, a spur kick, then a point-blank shot | J | X |
+| Shot; hold to fan the hammer | K | Y |
+| Hold steady: builds Nerve and reloads. Shot from it is a quickdraw | Q | Left trigger |
 | Dash; chases your rival from range | L | B |
 | Jump, and again in the air | Space | A |
 | Guard; tap while being hit to Slip behind them | Shift | Right trigger |
-| Charge Grit | Q | Left trigger |
 | Lariat; hold S to zip to them instead | E | Right bumper |
-| Last Word, with full Grit | R | Left bumper |
+| Last Word, with full Nerve | R | Left bumper |
 | Awaken, when the gauge is full | F | Click a stick |
 | Pause | Esc | Start |
 
-The fourth strike is the ender: hold W (up) to launch, S (down) to slam, or neither
-to blast them away. After a blast, dash to chase. After a launch, jump to follow.
+- **The cylinder holds six.** The fourth strike spends a round: hold W (up) to launch,
+  S (down) to slam, or neither to blast them away. When it runs dry, press Shot as the
+  marker crosses the gold for a fast reload.
+- **The standoff** opens every duel and starts again whenever you both hold steady.
+  Wait for the bell, then shoot first.
+- **Dead or alive:** when the rival drops, Shot finishes it and Lariat ropes them for
+  a bigger bounty.
 
 Touch controls appear on phones.
 

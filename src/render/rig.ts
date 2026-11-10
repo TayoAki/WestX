@@ -48,6 +48,8 @@ export class Rig {
   private auraMat: StandardMaterial;
   private clock: RigClock = { phase: 0, time: 0, tumble: 0, recoil: 0 };
   private flash = 0;
+  private handGuns: Mesh[] = [];
+  private hipGuns: Mesh[] = [];
   private lastPos = new Vector3();
   /** World position of the gun hand, for muzzle flashes and the lasso. */
   readonly hand: TransformNode;
@@ -124,7 +126,12 @@ export class Rig {
       part(cap(`fore${s}`, 0.34, 0.068), elbow, shirt, 0, -0.14, 0);
       part(CreateSphere(`f${id}-hand${s}`, { diameter: 0.14, segments: 8 }, scene), elbow, skin, 0, -0.31, 0);
       // A revolver in each hand, pointing along the forearm.
-      part(CreateBox(`f${id}-gun${s}`, { width: 0.05, height: 0.3, depth: 0.09 }, scene), elbow, steel, 0, -0.46, 0.03, 0.015);
+      this.handGuns.push(part(CreateBox(`f${id}-gun${s}`, { width: 0.05, height: 0.3, depth: 0.09 }, scene), elbow, steel, 0, -0.46, 0.03, 0.015));
+      // The same gun, holstered on the hip. Only one of the pair is shown at a time.
+      const holster = part(CreateBox(`f${id}-holster${s}`, { width: 0.06, height: 0.3, depth: 0.1 }, scene), body, steel, 0.215 * side, -0.16, 0.03, 0.015);
+      holster.rotation.x = 0.25;
+      holster.setEnabled(false);
+      this.hipGuns.push(holster);
       if (side > 0) hand = node("handR", elbow, 0, -0.6, 0.03);
 
       const hip = node(`hip${s}`, body, 0.11 * side, -0.08, 0);
@@ -200,14 +207,15 @@ export class Rig {
       for (const mat of this.mats) mat.setFloat("uFlash", this.flash * 0.85);
     }
 
-    // Aura strength follows what the fighter is doing.
+    for (const g of this.handGuns) g.setEnabled(!res.holstered);
+    for (const g of this.hipGuns) g.setEnabled(res.holstered);
+
+    // The aura belongs to the supernatural moments. Holding steady is quiet.
     let aura = 0;
-    if (f.state === "charge") aura = 0.16;
-    else if (f.state === "burst") aura = 0.34;
+    if (f.state === "burst") aura = 0.34;
     else if (f.state === "chase") aura = 0.14;
     else if (f.state === "cine") aura = 0;
     else if (f.awakened > 0) aura = 0.08;
-    else if (f.shotHold >= 12) aura = 0.04 + 0.08 * Math.min(1, f.shotHold / 34);
     const a = this.auraMat.alpha + (aura - this.auraMat.alpha) * (1 - Math.exp(-14 * dt));
     this.auraMat.alpha = a;
     const on = a > 0.01 && !res.hidden;

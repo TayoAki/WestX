@@ -1,13 +1,15 @@
 import type { Match, SimEvent } from "../sim/types";
 
-// All sound is synthesised with Web Audio: filtered noise for impacts and
-// gunshots, swept tones for dashes and energy. No audio files.
+// All sound is synthesised with Web Audio: filtered noise for gunshots and
+// impacts, struck tones for the bell and the cylinder, wind for the standoff.
+// No audio files.
 
 export class Sfx {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private noise: AudioBuffer | null = null;
-  private hum: { osc: OscillatorNode; gain: GainNode } | null = null;
+  private wind: { gain: GainNode; filter: BiquadFilterNode } | null = null;
+  private lastBeat = -1;
   muted = false;
 
   /** Must be called from a click or key press; browsers block audio before that. */
@@ -31,18 +33,19 @@ export class Sfx {
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
     this.noise = buf;
 
-    // A hum that rises with the meter while charging.
-    const osc = ctx.createOscillator();
-    osc.type = "sawtooth";
-    osc.frequency.value = 80;
+    // Wind: always running, silent until a standoff or a verdict.
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const filter = ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = 420;
+    filter.Q.value = 0.6;
     const gain = ctx.createGain();
     gain.gain.value = 0;
-    const lp = ctx.createBiquadFilter();
-    lp.type = "lowpass";
-    lp.frequency.value = 900;
-    osc.connect(lp).connect(gain).connect(this.master);
-    osc.start();
-    this.hum = { osc, gain };
+    src.connect(filter).connect(gain).connect(this.master);
+    src.start();
+    this.wind = { gain, filter };
   }
 
   setMuted(m: boolean): void {
@@ -50,10 +53,10 @@ export class Sfx {
     if (this.master && this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 0.55, this.ctx.currentTime, 0.02);
   }
 
-  private burst(dur: number, freq: number, q: number, gain: number, type: BiquadFilterType = "bandpass", sweepTo?: number): void {
+  private burst(dur: number, freq: number, q: number, gain: number, type: BiquadFilterType = "bandpass", sweepTo?: number, delay = 0): void {
     const ctx = this.ctx;
     if (!ctx || !this.master || !this.noise) return;
-    const t = ctx.currentTime;
+    const t = ctx.currentTime + delay;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
     src.loop = true;
@@ -70,10 +73,10 @@ export class Sfx {
     src.stop(t + dur + 0.02);
   }
 
-  private tone(from: number, to: number, dur: number, gain: number, type: OscillatorType = "sine"): void {
+  private tone(from: number, to: number, dur: number, gain: number, type: OscillatorType = "sine", delay = 0): void {
     const ctx = this.ctx;
     if (!ctx || !this.master) return;
-    const t = ctx.currentTime;
+    const t = ctx.currentTime + delay;
     const osc = ctx.createOscillator();
     osc.type = type;
     osc.frequency.setValueAtTime(from, t);
@@ -86,8 +89,46 @@ export class Sfx {
     osc.stop(t + dur + 0.02);
   }
 
+  /** A gunshot: a crack, a low thump, and a tail. `size` 1 is a pistol; 2 is the shot that ends things. */
+  private gun(size: number): void {
+    this.burst(0.05 + size * 0.04, 3800, 0.6, 0.45 + size * 0.15, "lowpass", 600);
+    this.tone(260 - size * 50, 45, 0.08 + size * 0.07, 0.4 + size * 0.2, "square");
+    this.burst(0.25 + size * 0.3, 1400, 0.5, 0.18 + size * 0.12, "lowpass", 180, 0.03);
+  }
+
+  /** The whine of a round going wide: the sound every western uses. */
+  private ricochet(): void {
+    this.tone(2600, 700, 0.45, 0.16, "sine", 0.06);
+    this.tone(2640, 690, 0.45, 0.1, "triangle", 0.06);
+  }
+
+  /** A small metallic tick: a hammer, a chamber, a cylinder turning. */
+  private tick(pitch = 2200, gain = 0.2, delay = 0): void {
+    this.tone(pitch, pitch * 0.7, 0.03, gain, "square", delay);
+    this.burst(0.02, 5000, 2, gain * 0.6, "highpass", undefined, delay);
+  }
+
+  /** A church bell: a few inharmonic partials with a long decay. */
+  private bell(): void {
+    const partials: [number, number, number][] = [
+      [392, 0.5, 2.2],
+      [784 * 1.02, 0.28, 1.6],
+      [1176 * 0.99, 0.18, 1.1],
+      [1568 * 1.05, 0.1, 0.7],
+      [196, 0.3, 2.4],
+    ];
+    for (const [f, g, d] of partials) this.tone(f, f * 0.995, d, g, "sine");
+    this.burst(0.04, 3000, 1, 0.3, "bandpass");
+  }
+
+  /** One plucked note with a bend: a stand-in for a guitar sting. */
+  private twang(freq: number, delay = 0): void {
+    this.tone(freq * 1.06, freq, 0.9, 0.2, "sawtooth", delay);
+    this.tone(freq * 2.12, freq * 2, 0.5, 0.08, "triangle", delay);
+  }
+
   click(): void {
-    this.tone(660, 440, 0.07, 0.18, "square");
+    this.tick(1800, 0.25);
   }
 
   onEvent(e: SimEvent): void {
@@ -113,13 +154,59 @@ export class Sfx {
         }
         break;
       case "shot":
-        if (e.heavy) {
-          this.tone(420, 50, 0.4, 0.6, "sawtooth");
-          this.burst(0.35, 2600, 0.6, 0.6, "lowpass", 200);
+        if (e.kind === "quick" || e.kind === "coup") {
+          this.gun(2);
+          this.ricochet();
         } else {
-          this.burst(0.11, 3200, 0.7, 0.42, "lowpass", 500);
-          this.tone(900, 120, 0.07, 0.25, "square");
+          this.gun(e.kind === "fan" ? 0.6 : 1);
         }
+        break;
+      case "enderShot":
+        this.gun(1.5);
+        break;
+      case "dryFire":
+        this.tick(900, 0.3);
+        break;
+      case "chamber":
+        this.tick(2600, 0.14);
+        break;
+      case "reloadStart":
+        // The cylinder swings out and spins.
+        for (let i = 0; i < 5; i++) this.tick(1500 + i * 120, 0.1, i * 0.035);
+        break;
+      case "reloadEnd":
+        if (e.perfect) {
+          this.tone(1760, 1760, 0.25, 0.22, "sine");
+          this.tone(2640, 2640, 0.3, 0.16, "sine", 0.05);
+          this.tick(2400, 0.25);
+        } else {
+          this.tick(1400, 0.22);
+          this.tick(900, 0.25, 0.07);
+        }
+        break;
+      case "reloadFumble":
+        this.tone(160, 70, 0.18, 0.4, "square");
+        this.tick(700, 0.2, 0.05);
+        break;
+      case "standoffStart":
+        this.twang(147);
+        this.twang(110, 0.35);
+        break;
+      case "standoffBell":
+        this.bell();
+        break;
+      case "standoffFlinch":
+        this.tone(220, 110, 0.2, 0.3, "sawtooth");
+        break;
+      case "standoffEnd":
+        if (e.trade) {
+          this.tone(3000, 1200, 0.3, 0.3, "triangle");
+          this.burst(0.3, 6000, 2, 0.35, "highpass");
+        }
+        break;
+      case "verdictStart":
+        this.tone(98, 92, 1.4, 0.3, "sawtooth");
+        this.twang(98, 0.2);
         break;
       case "slipOut":
         this.tone(1800, 300, 0.12, 0.28);
@@ -176,35 +263,38 @@ export class Sfx {
         this.burst(0.5, 4000, 3, 0.3, "bandpass", 600);
         break;
       case "cineHit":
-        this.burst(e.final ? 0.6 : 0.14, 3000, 0.7, e.final ? 0.9 : 0.55, "lowpass", e.final ? 80 : 400);
-        this.tone(e.final ? 300 : 800, 40, e.final ? 0.6 : 0.09, e.final ? 0.8 : 0.3, "square");
-        break;
-      case "clashStart":
-        this.tone(200, 700, 0.5, 0.4, "sawtooth");
-        break;
-      case "clashEnd":
-        this.tone(700, 30, 0.8, 0.9, "sawtooth");
-        this.burst(0.8, 2000, 0.5, 0.8, "lowpass", 60);
+        this.gun(e.final ? 2.4 : 1.4);
+        if (e.final) this.ricochet();
         break;
       case "ko":
-        this.tone(160, 22, 1.2, 1.0);
-        this.burst(1.1, 1600, 0.5, 0.8, "lowpass", 50);
-        break;
-      case "phase":
-        if (e.phase === "fight") this.tone(520, 1040, 0.18, 0.3, "square");
+        if (e.alive) {
+          this.burst(0.5, 700, 3, 0.4, "bandpass", 250);
+          this.twang(196);
+          this.twang(247, 0.25);
+        } else {
+          this.tone(160, 22, 1.2, 1.0);
+          this.burst(1.1, 1600, 0.5, 0.8, "lowpass", 50);
+        }
         break;
     }
   }
 
-  /** Continuous sounds driven by state rather than events. */
-  update(m: Match, view: number): void {
-    if (!this.ctx || !this.hum) return;
-    const f = m.fighters[view];
+  /** Continuous sound driven by state rather than events: wind and a heartbeat. */
+  update(m: Match): void {
+    if (!this.ctx || !this.wind) return;
     const t = this.ctx.currentTime;
-    const charging = f.state === "charge" || f.shotHold >= 12;
-    const level = charging ? 0.16 : m.clash ? 0.22 : 0;
-    const pitch = m.clash ? 140 + (m.clash.t % 20) * 6 : 70 + f.meter * 2.2 + f.shotHold * 3;
-    this.hum.gain.gain.setTargetAtTime(level, t, 0.04);
-    this.hum.osc.frequency.setTargetAtTime(pitch, t, 0.05);
+    const tense = !!m.standoff || m.phase === "verdict";
+    this.wind.gain.gain.setTargetAtTime(tense ? 0.22 : 0, t, 0.25);
+    this.wind.filter.frequency.setTargetAtTime(380 + Math.sin(t * 0.7) * 140, t, 0.3);
+
+    // A steady heartbeat under the standoff. It does not speed up, so it gives nothing away.
+    if (m.standoff && m.standoff.t < m.standoff.bellAt) {
+      const beat = Math.floor(m.standoff.t / 44);
+      if (beat !== this.lastBeat) {
+        this.lastBeat = beat;
+        this.tone(70, 42, 0.14, 0.5);
+        this.tone(64, 40, 0.12, 0.35, "sine", 0.16);
+      }
+    } else this.lastBeat = -1;
   }
 }

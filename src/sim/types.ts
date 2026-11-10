@@ -15,13 +15,13 @@ export interface InputFrame {
   dash: boolean;
   jump: boolean;
   guard: boolean;
-  charge: boolean;
+  steady: boolean;
   special: boolean;
   ult: boolean;
   awaken: boolean;
 }
 
-export const BUTTONS = ["strike", "shot", "dash", "jump", "guard", "charge", "special", "ult", "awaken"] as const;
+export const BUTTONS = ["strike", "shot", "dash", "jump", "guard", "steady", "special", "ult", "awaken"] as const;
 export type Button = (typeof BUTTONS)[number];
 
 export const blankInput = (): InputFrame => ({
@@ -33,7 +33,7 @@ export const blankInput = (): InputFrame => ({
   dash: false,
   jump: false,
   guard: false,
-  charge: false,
+  steady: false,
   special: false,
   ult: false,
   awaken: false,
@@ -55,13 +55,19 @@ export type FState =
   | "bounced"
   | "knockdown"
   | "getup"
-  | "charge"
+  /** Holstered and still: builds Nerve, tops up the cylinder, arms the quickdraw. */
+  | "steady"
   | "slip"
   | "pulled"
   | "zip"
   | "burst"
-  | "clash"
+  /** Frozen face to face, waiting for the bell. */
+  | "standoff"
   | "cine"
+  /** Beaten and on their knees, waiting for the winner's verdict. */
+  | "downed"
+  /** Roped and brought in alive. */
+  | "tied"
   | "ko";
 
 export type MoveId =
@@ -71,9 +77,11 @@ export type MoveId =
   | "enderBlast"
   | "enderLaunch"
   | "enderSlam"
-  | "heavyShot"
+  | "quickdraw"
+  | "fan"
   | "lariat"
-  | "lastWord";
+  | "lastWord"
+  | "coup";
 
 export type HitEffect = "reel" | "launch" | "blast" | "slam" | "stagger";
 
@@ -94,7 +102,7 @@ export interface Fighter {
   airJumps: number;
 
   hp: number;
-  /** Grit for the hunter. 0..100. */
+  /** Nerve. 0..100. Built by holding steady and by landing hits. */
   meter: number;
   /** Slip charges. */
   pips: number;
@@ -106,14 +114,28 @@ export interface Fighter {
   awakened: number;
   /** True once low health has filled the awakening gauge. */
   comebackUsed: boolean;
+
+  /** Rounds in the cylinder. */
   ammo: number;
+  /** Frames of reload left. Above zero means the cylinder is open. */
   reload: number;
-  sinceShot: number;
+  /** Frames since the reload began, for the timing window. */
+  reloadT: number;
+  /** One attempt at the perfect reload per reload. */
+  reloadTried: boolean;
+  /** Hot rounds left after a perfect reload. They hit harder. */
+  hot: number;
   shotCd: number;
-  /** Frames the shot button has been held, for the heavy shot. */
+  /** Frames the shot button has been held, for fanning the hammer. */
   shotHold: number;
   /** Frames left of the shooting pose, for the renderer. */
   shotPose: number;
+  /** True when the current ender had a round behind it. */
+  enderLive: boolean;
+  /** Damage multiplier for that round. */
+  enderMult: number;
+  /** How long the fighter held steady before the quickdraw, 0..1. */
+  quickPower: number;
 
   state: FState;
   /** Frames spent in the current state. */
@@ -150,7 +172,7 @@ export interface Fighter {
   combo: Combo;
 }
 
-export type ProjKind = "bullet" | "heavy" | "lasso" | "ult";
+export type ProjKind = "bullet" | "quick" | "lasso" | "ult";
 
 export interface Projectile {
   id: number;
@@ -161,6 +183,7 @@ export interface Projectile {
   vel: V3;
   life: number;
   radius: number;
+  damage: number;
 }
 
 export type PropKind = "crate" | "barrel" | "cactus" | "rock";
@@ -180,11 +203,24 @@ export interface Cine {
   t: number;
 }
 
-export interface Clash {
+export interface Standoff {
   t: number;
-  power: [number, number];
-  pos: V3;
+  /** Frame the bell tolls. Drawing before it is a flinch. */
+  bellAt: number;
+  /** Earliest frame each fighter may draw. A flinch pushes it past the bell. */
+  lock: [number, number];
+  /** The standoff that opens the duel; its shot cannot end the match. */
+  opening: boolean;
 }
+
+export interface Verdict {
+  t: number;
+  choice: "dead" | "alive" | null;
+  /** Frame the choice was made. */
+  at: number;
+}
+
+export type ShotKind = "bullet" | "fan" | "quick" | "coup";
 
 export type SimEvent =
   | { type: "phase"; phase: Match["phase"] }
@@ -200,7 +236,15 @@ export type SimEvent =
       perfect: boolean;
       projectile: boolean;
     }
-  | { type: "shot"; owner: number; pos: V3; heavy: boolean }
+  | { type: "shot"; owner: number; pos: V3; kind: ShotKind }
+  /** A string ender fired its round at point-blank range. */
+  | { type: "enderShot"; id: number; pos: V3; dir: V3 }
+  | { type: "dryFire"; id: number; pos: V3 }
+  /** A round slid into the cylinder while holding steady. */
+  | { type: "chamber"; id: number }
+  | { type: "reloadStart"; id: number }
+  | { type: "reloadEnd"; id: number; perfect: boolean }
+  | { type: "reloadFumble"; id: number }
   | { type: "lasso"; owner: number; hit: boolean }
   | { type: "slipOut"; id: number; pos: V3 }
   | { type: "slipIn"; id: number; pos: V3 }
@@ -219,19 +263,25 @@ export type SimEvent =
   | { type: "cineStart"; att: number; def: number }
   | { type: "cineHit"; att: number; def: number; pos: V3; final: boolean }
   | { type: "cineEnd"; att: number; def: number }
-  | { type: "clashStart"; pos: V3 }
-  | { type: "clashEnd"; winner: number; pos: V3 }
+  | { type: "standoffStart"; opening: boolean }
+  | { type: "standoffBell" }
+  | { type: "standoffFlinch"; id: number }
+  /** `winner` is -1 when nobody drew in time or both drew on the same frame (`trade`). */
+  | { type: "standoffEnd"; winner: number; trade: boolean }
+  | { type: "verdictStart"; winner: number; pos: V3 }
   | { type: "comboEnd"; att: number; hits: number; damage: number }
-  | { type: "ko"; winner: number; pos: V3 };
+  | { type: "ko"; winner: number; pos: V3; alive: boolean };
 
 export interface MatchOptions {
-  /** Training: the opponent's health refills and the player's meter stays topped up. */
+  /** Training: the opponent's health refills and the player's Nerve stays topped up. */
   training: boolean;
+  /** Open the duel with a standoff. */
+  opening: boolean;
 }
 
 export interface Match {
   tick: number;
-  phase: "intro" | "fight" | "ko" | "done";
+  phase: "intro" | "fight" | "verdict" | "ko" | "done";
   phaseT: number;
   fighters: [Fighter, Fighter];
   projectiles: Projectile[];
@@ -240,8 +290,13 @@ export interface Match {
   /** Frames of freeze left after a hit. */
   hitstop: number;
   cine: Cine | null;
-  clash: Clash | null;
+  standoff: Standoff | null;
+  /** Frames before another standoff can begin. */
+  standoffCd: number;
+  verdict: Verdict | null;
   winner: number;
+  /** How the loser was brought in. */
+  outcome: "dead" | "alive" | null;
   rng: Rng;
   events: SimEvent[];
   opts: MatchOptions;

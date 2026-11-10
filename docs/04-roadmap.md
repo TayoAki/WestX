@@ -34,14 +34,16 @@ isn't fun here, nothing built on top will save it.
 
 ### Phase 1: what exists
 
-- Strike strings with three enders: blast away, launch, slam
-- Light shots with six rounds and a reload, and a charged heavy shot
-- Charge, chase dash, evasive step, jump and double jump
+- Gun-fu strike strings whose ender fires a round: blast away, launch or slam
+- A six-round cylinder, a timed reload with a perfect window, and fanning the hammer
+- Holding steady to build Nerve and reload, and the quickdraw from the holster
+- The standoff: it opens every duel and starts again when both fighters hold steady
+- Dead or alive: the winner shoots, or ropes the loser for a bigger bounty
+- Chase dash, evasive step, jump and double jump
 - Guard, perfect guard and guard break
 - Slip, with four charges that refill over time
 - Lariat: pull the rival in, or zip to them
 - Awakening and the Last Word ultimate with its cinematic
-- Clash when two heavy shots meet
 - A rival AI on three difficulties, plus a training mode
 - Breakable props, craters, a combo counter, synthesised sound
 - Keyboard, gamepad and touch controls
@@ -50,9 +52,11 @@ isn't fun here, nothing built on top will save it.
 
 - The art is placeholder and the animation is generated from key poses.
 - Only the hunter exists. Both fighters use the same kit.
+- The arena is open desert. A town street, powder barrels, dynamite and the horse
+  are the next western pieces.
 - There is no music.
-- Balance is a first pass. AI-versus-AI duels last about a minute; the target for a
-  person is two to four.
+- Balance is a first pass. AI-versus-AI duels last a little over a minute; the target
+  for a person is two to four.
 - Frame rate, sound, touch and gamepad have not been tried on real hardware.
 
 ## Who you need, and when
@@ -79,7 +83,7 @@ isn't fun here, nothing built on top will save it.
 
 | # | Question | Why it matters |
 |---|---|---|
-| 1 | Does the fight feel right? What feels slow, floaty, unfair or confusing? | This is the Phase 1 gate |
+| 1 | Does the fight feel right, and does it feel western now? What feels slow, floaty, unfair or confusing? | This is the Phase 1 gate |
 | 2 | What device did you play on, and did it run smoothly? | I cannot measure frame rate here |
 | 3 | More flight, or keep it grounded with air combos? | Sets how close this plays to each of your two references |
 | 4 | Three fixed heroes, or a create-your-own character per class? | Changes how Phase 2 is built |

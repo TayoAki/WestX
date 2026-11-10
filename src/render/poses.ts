@@ -141,10 +141,12 @@ const BLAST_WIND = pose({
 });
 const BLAST_HIT = pose({
   y: -0.16,
-  spine: [0.4, 0, 0],
-  head: [-0.3, 0, 0],
-  shR: [-1.5, 0, -0.15],
-  shL: [-1.5, 0, 0.15],
+  spine: [0.4, -0.35, 0],
+  head: [-0.3, 0.3, 0],
+  shR: [-1.4, 0, -0.1],
+  elR: [-0.1, 0, 0],
+  shL: [0.7, 0, -0.4],
+  elL: [-1.2, 0, 0],
   hipL: [-0.95, 0, -0.1],
   knL: [0.95, 0, 0],
   hipR: [0.75, 0, 0.1],
@@ -197,32 +199,6 @@ const SLAM_HIT = pose({
   knL: [1.1, 0, 0],
   hipR: [-0.4, 0, 0.1],
   knR: [1.1, 0, 0],
-});
-
-const HEAVY_AIM = pose({
-  y: -0.1,
-  spine: [0.15, 0, 0],
-  shR: [-1.5, 0, -0.3],
-  elR: [-0.1, 0, 0],
-  shL: [-1.4, 0, 0.45],
-  elL: [-0.5, 0, 0],
-  hipL: [-0.3, 0, -0.3],
-  knL: [0.4, 0, 0],
-  hipR: [0.3, 0, 0.3],
-  knR: [0.4, 0, 0],
-});
-const HEAVY_FIRE = pose({
-  y: -0.06,
-  spine: [-0.28, 0, 0],
-  head: [0.2, 0, 0],
-  shR: [-2.05, 0, -0.3],
-  elR: [-0.4, 0, 0],
-  shL: [-1.95, 0, 0.45],
-  elL: [-0.7, 0, 0],
-  hipL: [-0.5, 0, -0.3],
-  knL: [0.5, 0, 0],
-  hipR: [0.5, 0, 0.3],
-  knR: [0.3, 0, 0],
 });
 
 const GUARD = pose({
@@ -312,20 +288,6 @@ const RISE = pose({
   knL: [1.7, 0, 0],
   hipR: [-0.6, 0, 0.1],
   knR: [1.7, 0, 0],
-});
-
-const CHARGE = pose({
-  y: -0.14,
-  spine: [0.12, 0, 0],
-  head: [-0.2, 0, 0],
-  shL: [0.25, 0, -0.55],
-  elL: [-1.5, 0, 0],
-  shR: [0.25, 0, 0.55],
-  elR: [-1.5, 0, 0],
-  hipL: [-0.2, 0, -0.4],
-  knL: [0.5, 0, 0],
-  hipR: [-0.2, 0, 0.4],
-  knR: [0.5, 0, 0],
 });
 
 const CHASE = pose({
@@ -428,16 +390,90 @@ const BURST = pose({
   knR: [0.3, 0, 0],
 });
 
-const CLASH = pose({
-  y: -0.15,
-  spine: [0.4, 0, 0],
-  head: [-0.3, 0, 0],
-  shL: [-1.5, 0, 0.2],
-  shR: [-1.5, 0, -0.2],
-  hipL: [-0.8, 0, -0.1],
-  knL: [0.8, 0, 0],
-  hipR: [0.6, 0, 0.1],
+// Holstered and still: feet planted, hat brim down, gun hand hovering.
+const STEADY = pose({
+  spine: [0.02, 0, 0],
+  head: [0.32, 0, 0],
+  shR: [0.05, 0, 0.42],
+  elR: [-0.55, 0, 0],
+  shL: [0.05, 0, -0.28],
+  elL: [-0.25, 0, 0],
+  hipL: [0, 0, -0.16],
+  knL: [0.05, 0, 0],
+  hipR: [0, 0, 0.16],
+  knR: [0.05, 0, 0],
+});
+
+// The quickdraw fires from the hip.
+const HIPFIRE = pose({
+  y: -0.04,
+  spine: [-0.12, -0.25, 0],
+  head: [0.1, 0.25, 0],
+  shR: [-0.75, 0, 0.12],
+  elR: [-0.85, 0, 0],
+  shL: [0.15, 0, -0.5],
+  elL: [-0.3, 0, 0],
+  hipL: [-0.2, 0, -0.18],
+  knL: [0.25, 0, 0],
+  hipR: [0.15, 0, 0.18],
   knR: [0.2, 0, 0],
+});
+
+// Fanning the hammer: gun at the hip, the off hand slapping across it.
+const FAN = pose({
+  y: -0.1,
+  spine: [0.18, -0.15, 0],
+  head: [-0.1, 0.15, 0],
+  shR: [-0.8, 0, 0.05],
+  elR: [-0.8, 0, 0],
+  shL: [-0.95, 0, 0.55],
+  elL: [-1.2, 0, 0],
+  hipL: [-0.4, 0, -0.2],
+  knL: [0.5, 0, 0],
+  hipR: [0.25, 0, 0.2],
+  knR: [0.45, 0, 0],
+});
+
+// Beaten: on both knees, head down.
+const DOWNED = pose({
+  y: -0.47,
+  spine: [0.55, 0, 0],
+  head: [0.55, 0, 0],
+  shL: [0.25, 0, -0.25],
+  elL: [-0.2, 0, 0],
+  shR: [0.25, 0, 0.25],
+  elR: [-0.2, 0, 0],
+  hipL: [-0.15, 0, -0.12],
+  knL: [1.65, 0, 0],
+  hipR: [-0.15, 0, 0.12],
+  knR: [1.65, 0, 0],
+});
+
+// Roped: arms pinned, toppled onto one side.
+const TIED = pose({
+  y: -0.72,
+  body: [0, 0, 1.45],
+  spine: [0.2, 0, 0],
+  head: [0.2, 0, 0],
+  shL: [0, 0, 0.12],
+  elL: [-0.5, 0, 0],
+  shR: [0, 0, -0.12],
+  elR: [-0.5, 0, 0],
+  hipL: [-0.5, 0, 0],
+  knL: [1.0, 0, 0],
+  hipR: [-0.5, 0, 0],
+  knR: [1.0, 0, 0],
+});
+
+// The finishing shot: arm out straight, aimed down at the kneeling loser.
+const COUP = pose({
+  spine: [0.08, -0.3, 0],
+  head: [0.25, 0.3, 0],
+  shR: [-1.2, 0, -0.05],
+  shL: [0.1, 0, -0.2],
+  elL: [-0.2, 0, 0],
+  hipL: [-0.1, 0, -0.14],
+  hipR: [0.1, 0, 0.14],
 });
 
 const VICTORY = pose({
@@ -494,6 +530,8 @@ export interface PoseResult {
   /** Extra whole-body rotation applied directly, for spins and tumbles. */
   spin: R3;
   hidden: boolean;
+  /** Guns on the hips instead of in the hands. */
+  holstered: boolean;
 }
 
 export interface RigClock {
@@ -509,23 +547,26 @@ export interface RigClock {
 
 /** Chooses the key pose for a fighter's current state. */
 export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number): PoseResult {
-  const res: PoseResult = { pose: IDLE, rate: 16, spin: [0, 0, 0], hidden: false };
+  const res: PoseResult = { pose: IDLE, rate: 16, spin: [0, 0, 0], hidden: false, holstered: false };
   const t = clock.time;
-  const jitter = Math.sin(t * 47) * 0.03;
 
   switch (f.state) {
     case "free": {
       if (m.phase !== "fight" && m.phase !== "intro" && m.winner === f.id) {
-        res.pose = VICTORY;
+        res.pose = m.phase === "verdict" ? AIM : VICTORY;
         res.rate = 6;
+        res.holstered = m.phase !== "verdict";
+        break;
+      }
+      if (m.phase === "intro") {
+        res.pose = STEADY;
+        res.holstered = true;
+        res.rate = 8;
         break;
       }
       if (!f.grounded) res.pose = f.vel.y > 2 ? JUMP : FALL;
       else res.pose = runPose(clock.phase, Math.min(1, speed / 5));
-      if (f.shotHold >= 12) {
-        res.pose = blend(HEAVY_AIM, pose({ ...HEAVY_AIM, y: HEAVY_AIM.y + jitter }), Math.min(1, f.shotHold / 34));
-        res.rate = 20;
-      } else if (f.shotPose > 0) {
+      if (f.shotPose > 0) {
         // Fire from the hip without breaking stride: only the gun arm and torso change.
         const base = res.pose;
         const kick = f.shotPose > 10 ? -0.35 : 0;
@@ -561,8 +602,18 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
         case "enderSlam":
           res.pose = strike(SLAM_WIND, SLAM_HIT, f.mf, from, mv!.total);
           break;
-        case "heavyShot":
-          res.pose = f.mf < mv!.fireAt! ? HEAVY_AIM : f.mf < mv!.fireAt! + 12 ? HEAVY_FIRE : blend(HEAVY_FIRE, IDLE, (f.mf - mv!.fireAt! - 12) / 12);
+        case "quickdraw":
+          res.pose = { ...HIPFIRE, shR: [HIPFIRE.shR[0] - (f.mf > mv!.fireAt! && f.mf < mv!.fireAt! + 8 ? 0.45 : 0), 0, HIPFIRE.shR[2]] };
+          res.rate = 60;
+          break;
+        case "fan":
+          // The off hand whips back and forth across the hammer.
+          res.pose = { ...FAN, elL: [FAN.elL[0] + Math.sin(f.mf * 1.26) * 0.5, 0, 0], shR: [FAN.shR[0] - (f.mf % 5 < 2 ? 0.18 : 0), 0, FAN.shR[2]] };
+          res.rate = 50;
+          break;
+        case "coup":
+          res.pose = { ...COUP, shR: [COUP.shR[0] - 0.6 * clock.recoil, 0, COUP.shR[2]] };
+          res.rate = 9;
           break;
         case "lariat":
           if (f.mf < mv!.fireAt!) {
@@ -632,9 +683,25 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
       res.pose = f.t < 7 ? RISE : IDLE;
       res.rate = 16;
       break;
-    case "charge":
-      res.pose = { ...CHARGE, y: CHARGE.y + jitter, spine: [0.12 + jitter, 0, 0] };
-      res.rate = 20;
+    case "steady":
+      res.pose = { ...STEADY, spine: [0.02, Math.sin(t * 1.3) * 0.03, 0] };
+      res.rate = 12;
+      res.holstered = true;
+      break;
+    case "standoff":
+      // Dead still, except for the fingers.
+      res.pose = { ...STEADY, elR: [STEADY.elR[0] + Math.sin(t * 19) * 0.035, 0, 0] };
+      res.rate = 10;
+      res.holstered = true;
+      break;
+    case "downed":
+      res.pose = { ...DOWNED, spine: [0.55 + Math.sin(t * 3) * 0.05, 0, 0] };
+      res.rate = 9;
+      break;
+    case "tied":
+      res.pose = TIED;
+      res.rate = 10;
+      res.holstered = true;
       break;
     case "slip":
       res.hidden = true;
@@ -646,10 +713,6 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
     case "burst":
       res.pose = BURST;
       res.rate = 30;
-      break;
-    case "clash":
-      res.pose = { ...CLASH, y: CLASH.y + jitter };
-      res.rate = 20;
       break;
     case "cine": {
       const cine = m.cine;

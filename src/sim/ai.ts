@@ -5,8 +5,8 @@ import { blankInput, type InputFrame, type Match } from "./types";
 import { dist, distH } from "./vec";
 
 // The AI plays through the same InputFrame as a person, so it obeys every rule
-// the player does. It runs a simple plan (approach, string, shoot, charge...)
-// and reacts to being attacked or comboed.
+// the player does. It runs a simple plan (approach, string, shoot, steady...)
+// and reacts to being attacked, comboed or called out.
 
 export interface AIParams {
   /** Chance to raise guard against an incoming strike. */
@@ -19,8 +19,14 @@ export interface AIParams {
   aggression: number;
   /** Chance to chase after blasting the opponent away. */
   chase: number;
-  /** Strike presses per second during a clash. */
-  mash: number;
+  /** Fastest and slowest draw after the bell, in frames. */
+  draw: [number, number];
+  /** Chance to flinch and draw before the bell. */
+  flinch: number;
+  /** Chance to answer a steady opponent by holding steady too, which makes a standoff. */
+  accept: number;
+  /** Chance to go for the perfect reload. */
+  reload: number;
   /** Frames of delay before it reacts. */
   react: number;
   /** Idle frames between plans. */
@@ -30,10 +36,10 @@ export interface AIParams {
 export type Difficulty = "dummy" | "easy" | "normal" | "hard";
 
 export const DIFFICULTY: Record<Difficulty, AIParams> = {
-  dummy: { guard: 0, perfect: 0, slip: 0, aggression: 0, chase: 0, mash: 0, react: 0, pause: 0 },
-  easy: { guard: 0.2, perfect: 0.0, slip: 0.1, aggression: 0.3, chase: 0.1, mash: 4.5, react: 18, pause: 80 },
-  normal: { guard: 0.5, perfect: 0.1, slip: 0.3, aggression: 0.7, chase: 0.6, mash: 7, react: 10, pause: 18 },
-  hard: { guard: 0.75, perfect: 0.3, slip: 0.5, aggression: 0.9, chase: 0.9, mash: 9.5, react: 5, pause: 6 },
+  dummy: { guard: 0, perfect: 0, slip: 0, aggression: 0, chase: 0, draw: [999, 999], flinch: 0, accept: 0, reload: 0, react: 0, pause: 0 },
+  easy: { guard: 0.2, perfect: 0.0, slip: 0.1, aggression: 0.3, chase: 0.1, draw: [28, 46], flinch: 0.12, accept: 0.25, reload: 0, react: 18, pause: 80 },
+  normal: { guard: 0.5, perfect: 0.1, slip: 0.3, aggression: 0.7, chase: 0.6, draw: [19, 30], flinch: 0.05, accept: 0.4, reload: 0.3, react: 10, pause: 18 },
+  hard: { guard: 0.75, perfect: 0.3, slip: 0.5, aggression: 0.9, chase: 0.9, draw: [13, 20], flinch: 0.02, accept: 0.5, reload: 0.7, react: 5, pause: 6 },
 };
 
 type Plan =
@@ -41,8 +47,8 @@ type Plan =
   | "approach"
   | "string"
   | "shoot"
-  | "heavy"
-  | "charge"
+  | "fan"
+  | "steady"
   | "circle"
   | "retreat"
   | "guard"
@@ -60,7 +66,6 @@ export class AI {
   private presses = 0;
   private pressedMove: string | null = null;
   private ender = 0;
-  private mashAcc = 0;
   private lastHitsTaken = 0;
   private slipAt = -1;
   private lastOppMoveKey = "";
@@ -68,6 +73,15 @@ export class AI {
   private guardUntil = -1;
   private chaseRolled = false;
   private pursueRolled = false;
+  /** Frame of the current standoff on which this AI will draw. */
+  private drawAt = -1;
+  private wasStandoff = false;
+  private verdictAt = -1;
+  private verdictAlive = false;
+  private quickAt = -1;
+  private steadyRolled = false;
+  private reloadRolled = false;
+  private reloadGo = false;
 
   constructor(
     private id: number,
@@ -88,26 +102,60 @@ export class AI {
     this.pdur = dur;
     this.presses = 0;
     this.pressedMove = null;
+    this.quickAt = -1;
     if (this.rng.chance(0.5)) this.side = -this.side;
   }
 
   think(m: Match): InputFrame {
     const inp = blankInput();
-    if (this.isDummy || m.phase !== "fight") return inp;
+    if (this.isDummy) return inp;
     const me = m.fighters[this.id];
     const op = m.fighters[1 - this.id];
     const p = this.p;
     const t = m.tick;
 
-    if (m.clash) {
-      this.mashAcc += p.mash / 60;
-      if (this.mashAcc >= 1 && !me.prev.strike) {
-        this.mashAcc -= 1;
-        inp.strike = true;
+    // Dead or alive: the winner takes a moment, then decides.
+    if (m.phase === "verdict" && m.verdict) {
+      if (m.winner !== this.id || m.verdict.choice) return inp;
+      if (this.verdictAt < 0) {
+        this.verdictAt = m.verdict.t + this.rng.int(40, 100);
+        this.verdictAlive = this.rng.chance(0.5);
+      }
+      if (m.verdict.t >= this.verdictAt && !me.prev.shot && !me.prev.special) {
+        if (this.verdictAlive) inp.special = true;
+        else inp.shot = true;
       }
       return inp;
     }
+    if (m.phase !== "fight") return inp;
+
+    // The standoff: wait for the bell, then draw after a human-sized reaction time.
+    if (m.standoff) {
+      const s = m.standoff;
+      if (!this.wasStandoff) {
+        this.wasStandoff = true;
+        const flinch = this.rng.chance(p.flinch);
+        this.drawAt = flinch ? this.rng.int(20, Math.max(21, s.bellAt - 4)) : s.bellAt + this.rng.int(p.draw[0], p.draw[1]);
+      }
+      // After a flinch, try again once the lockout has passed.
+      if (s.lock[this.id] > 0 && this.drawAt < s.lock[this.id]) this.drawAt = s.lock[this.id] + this.rng.int(4, 14);
+      if (s.t >= this.drawAt && !me.prev.shot) inp.shot = true;
+      return inp;
+    }
+    this.wasStandoff = false;
     if (m.cine) return inp;
+
+    // Working the cylinder: decide once per reload whether to go for the timing.
+    if (me.reload > 0) {
+      if (!this.reloadRolled) {
+        this.reloadRolled = true;
+        this.reloadGo = this.rng.chance(p.reload);
+      }
+      if (this.reloadGo && !me.reloadTried && me.reloadT >= C.RELOAD_PERFECT_FROM + 2 && !me.prev.shot && !isStunned(me)) {
+        inp.shot = true;
+        return inp;
+      }
+    } else this.reloadRolled = false;
 
     // Being comboed: maybe slip out. Each new hit is a fresh roll.
     if (isStunned(me)) {
@@ -163,25 +211,32 @@ export class AI {
         }
       }
     }
-    // A heavy shot or the ultimate is coming: step aside.
+    // The Last Word is coming: step aside.
     for (const proj of m.projectiles) {
-      if (proj.owner === this.id || proj.kind === "bullet") continue;
-      if (dist(proj.pos, me.pos) < 14 && me.state === "free" && me.stepCd <= 0 && this.rng.chance(p.guard * 0.25)) {
+      if (proj.owner === this.id || proj.kind !== "ult") continue;
+      if (dist(proj.pos, me.pos) < 16 && me.state === "free" && me.stepCd <= 0 && this.rng.chance(p.guard * 0.3)) {
         inp.dash = !me.prev.dash;
         inp.mx = this.side;
         return inp;
       }
     }
-    // Answer a charging heavy shot with one of our own, which can end in a clash.
-    if (op.shotHold === 12 && me.state === "free" && me.meter >= C.HEAVY_COST && dh > 14) {
-      if (this.rng.chance(0.15 + p.aggression * 0.45)) this.setPlan("heavy", 80);
+
+    // The opponent has stopped and holstered. Either rush them, shoot them out of it,
+    // or stop too and let it become a standoff.
+    if (op.state === "steady" && op.t === 14 + p.react && !this.steadyRolled && (me.state === "free" || me.state === "steady")) {
+      this.steadyRolled = true;
+      if (m.standoffCd === 0 && me.grounded && dh > 5 && this.rng.chance(p.accept)) this.setPlan("steady", 140);
+      else if (dh > 7 && me.ammo > 0 && this.rng.chance(0.6)) this.setPlan("shoot", 40);
+      else if (this.rng.chance(p.aggression)) this.setPlan("approach", 70);
     }
+    if (op.state !== "steady") this.steadyRolled = false;
+
     if (t >= this.guardAt && t < this.guardUntil) {
       inp.guard = true;
       return inp;
     }
 
-    if (me.state !== "free" && me.state !== "attack" && me.state !== "charge" && me.state !== "guard") return inp;
+    if (me.state !== "free" && me.state !== "attack" && me.state !== "steady" && me.state !== "guard") return inp;
 
     this.pt++;
     if (this.plan === "idle" && this.pt >= this.pdur) this.choose(m, dh, dy);
@@ -237,16 +292,26 @@ export class AI {
         if (this.pt >= this.pdur || me.reload > 0) this.setPlan("idle", this.rng.int(4, 12 + p.pause));
         break;
       }
-      case "heavy": {
-        inp.shot = this.pt < C.HEAVY_HOLD + 6;
-        inp.mx = this.side * 0.5;
-        if (this.pt >= C.HEAVY_HOLD + 30) this.setPlan("idle", this.rng.int(4, 12 + p.pause));
+      case "fan": {
+        // Hold the trigger and let the other hand do the work.
+        inp.shot = true;
+        if (this.pt >= this.pdur || me.reload > 0 || (this.pt > 16 && me.state === "free")) {
+          this.setPlan("idle", this.rng.int(6, 14 + p.pause));
+        }
         break;
       }
-      case "charge": {
-        inp.charge = true;
-        const threatened = dh < 9 || (op.state === "attack" && op.move === "lastWord");
-        if (this.pt >= this.pdur || me.meter >= C.METER || threatened) this.setPlan("idle", 2);
+      case "steady": {
+        inp.steady = true;
+        // Decide once how long to wait before the quickdraw, if at all.
+        if (this.quickAt < 0) this.quickAt = this.rng.chance(0.45 + p.aggression * 0.3) ? this.rng.int(C.QUICK_MIN + 6, 80) : 9999;
+        const armed = me.state === "steady" && me.t >= C.QUICK_MIN && me.ammo > 0 && me.reload === 0;
+        const rushed = dh < 8 && op.state !== "steady";
+        if (armed && (me.t >= this.quickAt || rushed) && !me.prev.shot && op.state !== "steady") {
+          inp.shot = true;
+          this.setPlan("idle", this.rng.int(6, 16));
+        } else if (this.pt >= this.pdur || (rushed && !armed) || (me.meter >= C.METER && me.ammo >= C.AMMO && op.state !== "steady")) {
+          this.setPlan("idle", 2);
+        }
         break;
       }
       case "circle": {
@@ -306,16 +371,21 @@ export class AI {
 
     const options: [Plan, number, number][] = [];
     const a = p.aggression;
+    const loaded = me.reload === 0 && me.ammo > 0;
+    const wantsSteady = me.grounded && (me.meter < 70 || me.ammo < 3);
     if (dh > 18) {
-      options.push(["approach", 3 * a, 90], ["shoot", 1.5, r.int(40, 80)], ["circle", 0.6, r.int(30, 60)]);
-      if (me.meter < 70) options.push(["charge", 2.2, r.int(50, 110)]);
-      if (me.meter >= C.HEAVY_COST) options.push(["heavy", 0.8, 80]);
+      options.push(["approach", 3 * a, 90], ["circle", 0.6, r.int(30, 60)]);
+      if (loaded) options.push(["shoot", 1.5, r.int(40, 80)]);
+      if (wantsSteady) options.push(["steady", 2.4, r.int(50, 110)]);
+      else if (me.grounded) options.push(["steady", 0.7, r.int(40, 80)]);
+      if (loaded && me.ammo >= 4) options.push(["fan", 0.7, 60]);
       if (me.meter >= C.LARIAT_COST && dh < 25) options.push(["lariat", 1.2 * a, 50]);
     } else if (dh > 5) {
-      options.push(["approach", 3.5 * a, 70], ["shoot", 1.5, r.int(30, 60)], ["circle", 1, r.int(25, 50)]);
+      options.push(["approach", 3.5 * a, 70], ["circle", 1, r.int(25, 50)]);
+      if (loaded) options.push(["shoot", 1.5, r.int(30, 60)]);
       if (me.meter >= C.LARIAT_COST) options.push(["lariat", 1.6 * a, 50]);
-      if (me.meter >= C.HEAVY_COST) options.push(["heavy", 0.6, 80]);
-      if (me.meter < 40) options.push(["charge", 0.8, r.int(40, 70)]);
+      if (loaded && me.ammo >= 3) options.push(["fan", 0.8, 60]);
+      if (wantsSteady) options.push(["steady", 1.0, r.int(40, 70)]);
     } else {
       if (Math.abs(dy) < 1.7) options.push(["approach", 5 * a, 40]);
       options.push(["circle", 1, r.int(20, 40)], ["retreat", 1 - a * 0.6, r.int(25, 45)], ["guard", 0.8, r.int(20, 40)]);

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AI } from "../src/sim/ai";
 import { createMatch, stepMatch } from "../src/sim/match";
 import { C } from "../src/sim/moves";
-import { blankInput, type InputFrame, type Match, type SimEvent } from "../src/sim/types";
+import { blankInput, type InputFrame, type Match, type MatchOptions, type SimEvent } from "../src/sim/types";
 import { dirOfYaw, distH, sub, v3 } from "../src/sim/vec";
 
 type Partial1 = Partial<InputFrame>;
@@ -17,9 +17,9 @@ function run(m: Match, n: number, p0: Script = {}, p1: Script = {}): SimEvent[] 
   return events;
 }
 
-/** A match past its intro, with the fighters `gap` metres apart. */
-function fight(gap = 2, opts = {}): Match {
-  const m = createMatch(7, opts);
+/** A match past its intro with no opening standoff, the fighters `gap` metres apart. */
+function fight(gap = 2, opts: Partial<MatchOptions> = {}): Match {
+  const m = createMatch(7, { opening: false, ...opts });
   m.props = [];
   run(m, C.INTRO_T);
   expect(m.phase).toBe("fight");
@@ -33,46 +33,46 @@ const tap =
   (button: keyof InputFrame, period = 8, extra: Partial1 = {}): Script =>
   (t) => ({ ...extra, [button]: t % period < 2 });
 
-const hits = (ev: SimEvent[]) => ev.filter((e) => e.type === "hit" && !e.blocked);
+/** A four-press strike string, with `tilt` held for the ender. */
+const string =
+  (tilt = 0): Script =>
+  (t) => ({ strike: t < 70 && t % 8 < 2, tilt: t > 20 ? tilt : 0 });
+
+const hits = (ev: SimEvent[]) => ev.filter((e) => e.type === "hit" && !e.blocked) as Extract<SimEvent, { type: "hit" }>[];
 const has = (ev: SimEvent[], type: SimEvent["type"]) => ev.some((e) => e.type === type);
 
-describe("match flow", () => {
-  it("holds both fighters during the intro, then starts the fight", () => {
-    const m = createMatch(1);
-    const ev = run(m, C.INTRO_T, { my: 1, strike: true });
-    expect(m.fighters[0].pos.z).toBe(-6);
-    expect(ev.some((e) => e.type === "phase" && e.phase === "fight")).toBe(true);
-  });
-
-  it("ends with a knockout and declares the winner", () => {
-    const m = fight();
-    m.fighters[1].hp = 10;
-    const ev = run(m, 30, tap("strike"));
-    expect(has(ev, "ko")).toBe(true);
-    expect(m.winner).toBe(0);
-    run(m, C.KO_T + 5);
-    expect(m.phase).toBe("done");
-  });
-});
-
 describe("strike string", () => {
-  it("lands four hits and blasts the target at least 30 m away", () => {
+  it("lands four hits and the ender's round blasts the target at least 30 m away", () => {
     const m = fight();
     const start = { ...m.fighters[1].pos };
-    const ev = run(m, 200, (t) => ({ strike: t < 70 && t % 8 < 2 }));
+    const ev = run(m, 200, string());
     expect(hits(ev).length).toBe(4);
     expect(hits(ev).at(-1)).toMatchObject({ effect: "blast" });
+    expect(has(ev, "enderShot")).toBe(true);
     const travelled = distH(m.fighters[1].pos, start);
     expect(travelled).toBeGreaterThan(30);
     expect(travelled).toBeLessThan(60);
-    expect(m.fighters[1].hp).toBeLessThan(C.HP - 100);
+    expect(m.fighters[0].ammo).toBe(C.AMMO - 1);
+  });
+
+  it("lands as a weak pistol-whip when the cylinder is empty", () => {
+    const m = fight();
+    m.fighters[0].ammo = 0;
+    m.fighters[0].reload = 600;
+    const start = { ...m.fighters[1].pos };
+    const ev = run(m, 120, string());
+    expect(hits(ev).length).toBe(4);
+    expect(hits(ev).at(-1)).toMatchObject({ effect: "reel" });
+    expect(has(ev, "dryFire")).toBe(true);
+    expect(has(ev, "enderShot")).toBe(false);
+    expect(distH(m.fighters[1].pos, start)).toBeLessThan(6);
   });
 
   it("launches when the ender is pressed with up held", () => {
     const m = fight();
     let peak = 0;
     for (let t = 0; t < 120; t++) {
-      stepMatch(m, [frame({ strike: t < 70 && t % 8 < 2, tilt: t > 20 ? 1 : 0 }, t), blankInput()]);
+      stepMatch(m, [frame(string(1), t), blankInput()]);
       peak = Math.max(peak, m.fighters[1].pos.y);
     }
     expect(peak).toBeGreaterThan(7);
@@ -80,7 +80,7 @@ describe("strike string", () => {
 
   it("slams a grounded target into a bounce when down is held", () => {
     const m = fight();
-    const ev = run(m, 90, (t) => ({ strike: t < 70 && t % 8 < 2, tilt: t > 20 ? -1 : 0 }));
+    const ev = run(m, 90, string(-1));
     expect(hits(ev).at(-1)).toMatchObject({ effect: "slam" });
     expect(has(ev, "groundSlam")).toBe(true);
   });
@@ -103,7 +103,7 @@ describe("strike string", () => {
 
   it("scales damage down as the combo grows", () => {
     const m = fight();
-    const ev = hits(run(m, 80, tap("strike"))) as Extract<SimEvent, { type: "hit" }>[];
+    const ev = hits(run(m, 80, tap("strike")));
     expect(ev[0].damage).toBeCloseTo(22, 5);
     expect(ev[1].damage).toBeCloseTo(24 * 0.92, 5);
   });
@@ -158,7 +158,6 @@ describe("slip", () => {
     }
     const facing = dirOfYaw(att.yaw);
     const toDef = sub(m.fighters[1].pos, att.pos);
-    // The attacker turns to face the target once free, so check at the moment of arrival.
     expect(Math.abs(distH(m.fighters[1].pos, att.pos) - C.SLIP_BEHIND)).toBeLessThan(0.3);
     expect(facing.x * toDef.x + facing.z * toDef.z).toBeLessThan(0);
   });
@@ -180,7 +179,7 @@ describe("slip", () => {
 });
 
 describe("chase and step", () => {
-  it("crosses 40 m in under half a second and costs meter", () => {
+  it("crosses 40 m in under half a second and costs Nerve", () => {
     const m = fight(40);
     m.fighters[0].meter = 100;
     let ticks = 0;
@@ -216,60 +215,210 @@ describe("chase and step", () => {
   });
 });
 
-describe("meter", () => {
-  it("fills while charging", () => {
-    const m = fight(30);
-    m.fighters[0].meter = 0;
-    run(m, 120, { charge: true });
-    expect(m.fighters[0].state).toBe("charge");
-    expect(m.fighters[0].meter).toBeGreaterThan(55);
-    expect(m.fighters[0].meter).toBeLessThan(70);
-  });
-});
-
-describe("shots", () => {
-  it("fires six rounds, then reloads", () => {
+describe("the cylinder", () => {
+  it("fires six rounds, then opens for a reload", () => {
     const m = fight(20);
-    const ev = run(m, 75, tap("shot", 6));
+    const ev = run(m, 62, tap("shot", 10));
     expect(ev.filter((e) => e.type === "shot").length).toBe(6);
     expect(m.fighters[0].ammo).toBe(0);
+    expect(has(ev, "reloadStart")).toBe(true);
     run(m, C.RELOAD + 2);
     expect(m.fighters[0].ammo).toBe(C.AMMO);
   });
 
-  it("does not interrupt a fighter who is lining up a heavy shot", () => {
+  it("does not refill on its own while rounds remain", () => {
     const m = fight(20);
-    m.fighters[1].meter = 50;
-    m.fighters[1].ammo = 0;
-    m.fighters[1].reload = 600;
-    const ev = run(m, 30, (t) => ({ shot: t >= 14 && t < 16 }), { shot: true });
-    expect(hits(ev).length).toBe(1);
-    expect(m.fighters[1].state).toBe("free");
-    expect(m.fighters[1].hp).toBeLessThan(C.HP);
+    run(m, 4, (t) => ({ shot: t < 2 }));
+    run(m, 400);
+    expect(m.fighters[0].ammo).toBe(C.AMMO - 1);
   });
 
   it("damages a target standing in the open", () => {
     const m = fight(20);
     const ev = run(m, 30, (t) => ({ shot: t < 2 }));
     expect(hits(ev).length).toBe(1);
-    expect(m.fighters[1].hp).toBe(C.HP - 14);
+    expect(m.fighters[1].hp).toBe(C.HP - C.BULLET_DMG);
   });
 
-  it("releases a heavy shot after a full hold, and it blasts the target", () => {
-    const m = fight(20);
-    m.fighters[0].meter = 50;
-    const ev = run(m, 120, (t) => ({ shot: t < C.HEAVY_HOLD + 4 }));
-    expect(ev.some((e) => e.type === "shot" && e.heavy)).toBe(true);
-    expect(ev.some((e) => e.type === "hit" && e.effect === "blast" && e.projectile)).toBe(true);
+  const emptied = (): Match => {
+    const m = fight(40);
+    m.fighters[0].ammo = 1;
+    run(m, 3, (t) => ({ shot: t < 2 }));
+    expect(m.fighters[0].reload).toBeGreaterThan(0);
+    return m;
+  };
+
+  it("snaps shut early with hot rounds when the timing is hit", () => {
+    const m = emptied();
+    run(m, C.RELOAD_PERFECT_FROM);
+    const ev = run(m, 3, (t) => ({ shot: t < 2 }));
+    expect(ev.some((e) => e.type === "reloadEnd" && e.perfect)).toBe(true);
+    expect(m.fighters[0].ammo).toBe(C.AMMO);
+    expect(m.fighters[0].hot).toBe(C.HOT_ROUNDS);
   });
 
-  it("does not release a heavy shot without the meter for it", () => {
+  it("takes longer when the timing is missed", () => {
+    const m = emptied();
+    run(m, C.RELOAD_GRACE + 2);
+    const before = m.fighters[0].reload;
+    const ev = run(m, 3, (t) => ({ shot: t < 2 }));
+    expect(has(ev, "reloadFumble")).toBe(true);
+    expect(m.fighters[0].reload).toBeGreaterThan(before);
+    // Only one attempt per reload.
+    run(m, C.RELOAD_PERFECT_FROM - C.RELOAD_GRACE, {});
+    const again = run(m, 3, (t) => ({ shot: t < 2 }));
+    expect(again.some((e) => e.type === "reloadEnd" && e.perfect)).toBe(false);
+  });
+
+  it("ignores presses in the first moments, so mashing on empty is not punished", () => {
+    const m = emptied();
+    const ev = run(m, C.RELOAD_GRACE - 4, tap("shot", 4));
+    expect(has(ev, "reloadFumble")).toBe(false);
+  });
+
+  it("makes hot rounds hit harder", () => {
+    const m = emptied();
+    run(m, C.RELOAD_PERFECT_FROM);
+    run(m, 3, (t) => ({ shot: t < 2 }));
+    m.fighters[1].pos = v3(0, 0, -5);
+    const ev = run(m, 30, (t) => ({ shot: t >= 12 && t < 14 }));
+    expect(hits(ev)[0].damage).toBeCloseTo(C.BULLET_DMG * C.HOT_DMG, 5);
+  });
+
+  it("fans the hammer while the trigger is held, emptying the cylinder", () => {
     const m = fight(20);
+    const ev = run(m, 80, { shot: true });
+    expect(ev.filter((e) => e.type === "shot" && e.kind === "fan").length).toBe(C.AMMO - 1);
+    expect(m.fighters[0].ammo).toBe(0);
+    expect(hits(ev).length).toBeGreaterThanOrEqual(C.AMMO - 1);
+  });
+});
+
+describe("holding steady", () => {
+  it("builds Nerve and slides rounds back into the cylinder", () => {
+    const m = fight(30);
     m.fighters[0].meter = 0;
-    m.fighters[0].ammo = 0;
-    m.fighters[0].reload = 600;
-    const ev = run(m, 80, (t) => ({ shot: t < C.HEAVY_HOLD + 4 }));
-    expect(ev.some((e) => e.type === "shot")).toBe(false);
+    m.fighters[0].ammo = 2;
+    const ev = run(m, 120, { steady: true });
+    expect(m.fighters[0].state).toBe("steady");
+    expect(m.fighters[0].meter).toBeGreaterThan(55);
+    expect(m.fighters[0].ammo).toBe(C.AMMO);
+    expect(ev.filter((e) => e.type === "chamber").length).toBe(4);
+  });
+
+  it("cannot be done in the air", () => {
+    const m = fight(30);
+    run(m, 6, (t) => ({ jump: t < 2 }));
+    run(m, 10, { steady: true });
+    expect(m.fighters[0].state).toBe("free");
+  });
+
+  it("arms a quickdraw that hits far harder than an ordinary shot", () => {
+    const m = fight(20);
+    run(m, C.QUICK_MIN + 2, { steady: true });
+    const ev = run(m, 30, (t) => ({ steady: true, shot: t < 2 }));
+    expect(ev.some((e) => e.type === "shot" && e.kind === "quick")).toBe(true);
+    const hit = hits(ev)[0];
+    expect(hit.damage).toBeGreaterThanOrEqual(C.QUICK_DMG_MIN);
+    expect(hit.effect).toBe("blast");
+  });
+
+  it("gives the quickdraw more power the longer the wait", () => {
+    const damageAfter = (wait: number): number => {
+      const m = fight(20);
+      run(m, wait, { steady: true });
+      return hits(run(m, 30, (t) => ({ steady: true, shot: t < 2 })))[0].damage;
+    };
+    expect(damageAfter(C.QUICK_FULL + 5)).toBeCloseTo(C.QUICK_DMG_MAX, 5);
+    expect(damageAfter(C.QUICK_MIN + 2)).toBeLessThan(C.QUICK_DMG_MIN + 10);
+  });
+
+  it("fires an ordinary shot if the hand has not settled yet", () => {
+    const m = fight(20);
+    run(m, 6, { steady: true });
+    const ev = run(m, 20, (t) => ({ steady: t < 2, shot: t < 2 }));
+    expect(ev.some((e) => e.type === "shot" && e.kind === "bullet")).toBe(true);
+    expect(ev.some((e) => e.type === "shot" && e.kind === "quick")).toBe(false);
+  });
+});
+
+describe("standoff", () => {
+  /** A match stopped at the first tick of its opening standoff. */
+  const opening = (): Match => {
+    const m = createMatch(11);
+    m.props = [];
+    run(m, C.INTRO_T);
+    expect(m.standoff).not.toBeNull();
+    expect(m.fighters[0].state).toBe("standoff");
+    return m;
+  };
+
+  it("opens every duel", () => {
+    const m = createMatch(3);
+    const ev = run(m, C.INTRO_T);
+    expect(ev.some((e) => e.type === "standoffStart" && e.opening)).toBe(true);
+  });
+
+  it("is won by whoever draws first after the bell", () => {
+    const m = opening();
+    const bell = m.standoff!.bellAt;
+    const ev = run(m, bell + 40, (t) => ({ shot: t >= bell + 5 && t < bell + 7 }), (t) => ({ shot: t >= bell + 12 && t < bell + 14 }));
+    expect(has(ev, "standoffBell")).toBe(true);
+    expect(ev.find((e) => e.type === "standoffEnd")).toMatchObject({ winner: 0, trade: false });
+    expect(m.fighters[1].hp).toBe(C.HP - C.STANDOFF_DMG);
+    expect(m.fighters[0].hp).toBe(C.HP);
+    expect(m.standoff).toBeNull();
+  });
+
+  it("punishes drawing before the bell", () => {
+    const m = opening();
+    const bell = m.standoff!.bellAt;
+    // Player 0 flinches early, then presses again right on the bell: still locked out.
+    const p0: Script = (t) => ({ shot: (t >= 10 && t < 12) || (t >= bell + 2 && t < bell + 4) });
+    const p1: Script = (t) => ({ shot: t >= bell + 15 && t < bell + 17 });
+    const ev = run(m, bell + 40, p0, p1);
+    expect(ev.some((e) => e.type === "standoffFlinch" && e.id === 0)).toBe(true);
+    expect(ev.find((e) => e.type === "standoffEnd")).toMatchObject({ winner: 1 });
+  });
+
+  it("ends with no shot if nobody draws", () => {
+    const m = opening();
+    const ev = run(m, C.STANDOFF_WAIT_MAX + C.STANDOFF_WINDOW + 5);
+    expect(ev.find((e) => e.type === "standoffEnd")).toMatchObject({ winner: -1, trade: false });
+    expect(m.fighters[0].state).toBe("free");
+  });
+
+  it("is a trade when both draw on the same instant", () => {
+    const m = opening();
+    const bell = m.standoff!.bellAt;
+    const both: Script = (t) => ({ shot: t >= bell + 8 && t < bell + 10 });
+    const ev = run(m, bell + 40, both, both);
+    expect(ev.find((e) => e.type === "standoffEnd")).toMatchObject({ winner: -1, trade: true });
+    expect(m.fighters[0].hp).toBe(C.HP);
+    expect(m.fighters[1].hp).toBe(C.HP);
+  });
+
+  it("cannot end the match when it is the opening shot", () => {
+    const m = opening();
+    m.fighters[1].hp = 20;
+    const bell = m.standoff!.bellAt;
+    run(m, bell + 40, (t) => ({ shot: t >= bell + 5 && t < bell + 7 }));
+    expect(m.phase).toBe("fight");
+    expect(m.fighters[1].hp).toBe(1);
+  });
+
+  it("starts mid-fight when both fighters hold steady", () => {
+    const m = fight(20);
+    const ev = run(m, C.STANDOFF_MUTUAL + 5, { steady: true }, { steady: true });
+    expect(ev.some((e) => e.type === "standoffStart" && !e.opening)).toBe(true);
+    expect(m.standoff).not.toBeNull();
+  });
+
+  it("does not leave a stray shot behind", () => {
+    const m = opening();
+    const bell = m.standoff!.bellAt;
+    const ev = run(m, bell + 60, (t) => ({ shot: t >= bell + 5 && t < bell + 7 }));
+    expect(ev.filter((e) => e.type === "shot").length).toBe(1);
   });
 });
 
@@ -302,14 +451,14 @@ describe("lariat", () => {
 });
 
 describe("ultimate", () => {
-  it("needs a full meter", () => {
+  it("needs full Nerve", () => {
     const m = fight(10);
     m.fighters[0].meter = 90;
     const ev = run(m, 40, (t) => ({ ult: t < 2 }));
     expect(has(ev, "ultStart")).toBe(false);
   });
 
-  it("plays its sequence and deals its full damage", () => {
+  it("plays its sequence, deals its full damage and empties the cylinder", () => {
     const m = fight(10);
     m.fighters[0].meter = 100;
     const ev = run(m, 320, (t) => ({ ult: t < 2 }));
@@ -318,7 +467,7 @@ describe("ultimate", () => {
     expect(ev.filter((e) => e.type === "cineHit").length).toBe(7);
     const expected = C.CINE_HITS.length * C.CINE_HIT_DMG + C.CINE_FINAL_DMG;
     expect(C.HP - m.fighters[1].hp).toBeCloseTo(expected, 5);
-    expect(m.fighters[0].meter).toBeLessThan(40);
+    expect(has(ev, "reloadStart")).toBe(true);
     expect(m.cine).toBeNull();
   });
 
@@ -360,25 +509,55 @@ describe("awakening", () => {
   });
 });
 
-describe("clash", () => {
-  it("locks two heavy shots together and the faster masher wins", () => {
-    const m = fight(24);
-    for (const f of m.fighters) {
-      f.meter = 50;
-      // Empty guns, so the opening tap does not interrupt either fighter's hold.
-      f.ammo = 0;
-      f.reload = 600;
-    }
-    const hold: Script = (t) => ({ shot: t < C.HEAVY_HOLD + 4 });
-    const ev = run(m, 70, hold, hold);
-    expect(has(ev, "clashStart")).toBe(true);
-    expect(m.fighters[0].state).toBe("clash");
-    const end = run(m, C.CLASH_T + 5, tap("strike", 4), tap("strike", 12));
-    const result = end.find((e) => e.type === "clashEnd");
-    expect(result).toMatchObject({ winner: 0 });
-    expect(m.fighters[1].hp).toBe(C.HP - C.CLASH_DMG);
-    expect(m.fighters[0].hp).toBe(C.HP);
-    expect(m.clash).toBeNull();
+describe("dead or alive", () => {
+  /** Beats fighter 1 and stops at the start of the verdict. */
+  const beaten = (): Match => {
+    const m = fight();
+    m.fighters[1].hp = 10;
+    const ev = run(m, 30, (t) => ({ strike: t < 2 }));
+    expect(has(ev, "verdictStart")).toBe(true);
+    expect(m.phase).toBe("verdict");
+    expect(m.fighters[1].state).toBe("downed");
+    expect(m.winner).toBe(0);
+    return m;
+  };
+
+  it("drops the loser to their knees and waits for the winner", () => {
+    const m = beaten();
+    run(m, 60);
+    expect(m.phase).toBe("verdict");
+  });
+
+  it("ends with a shot when the winner chooses dead", () => {
+    const m = beaten();
+    run(m, C.VERDICT_GRACE + 2);
+    const ev = run(m, 40, (t) => ({ shot: t < 2 }));
+    expect(ev.find((e) => e.type === "ko")).toMatchObject({ winner: 0, alive: false });
+    expect(m.outcome).toBe("dead");
+    expect(m.fighters[1].state).toBe("ko");
+    run(m, C.KO_T + 5);
+    expect(m.phase).toBe("done");
+  });
+
+  it("ropes the loser when the winner chooses alive", () => {
+    const m = beaten();
+    run(m, C.VERDICT_GRACE + 2);
+    const ev = run(m, 40, (t) => ({ special: t < 2 }));
+    expect(ev.find((e) => e.type === "ko")).toMatchObject({ winner: 0, alive: true });
+    expect(m.outcome).toBe("alive");
+    expect(m.fighters[1].state).toBe("tied");
+  });
+
+  it("ignores presses carried over from the last combo", () => {
+    const m = beaten();
+    const ev = run(m, C.VERDICT_GRACE - 2, tap("shot", 4));
+    expect(has(ev, "ko")).toBe(false);
+  });
+
+  it("defaults to dead when the winner does not choose", () => {
+    const m = beaten();
+    const ev = run(m, C.VERDICT_T + C.VERDICT_ACT + 5);
+    expect(ev.find((e) => e.type === "ko")).toMatchObject({ alive: false });
   });
 });
 
@@ -386,7 +565,7 @@ describe("props", () => {
   it("break when a blasted fighter flies through them", () => {
     const m = fight();
     m.props = [{ kind: "crate", pos: v3(0, 0, 12), radius: 0.75, height: 1.3, hp: 2, broken: false }];
-    const ev = run(m, 200, (t) => ({ strike: t < 70 && t % 8 < 2 }));
+    const ev = run(m, 200, string());
     expect(has(ev, "propBreak")).toBe(true);
     expect(m.props[0].broken).toBe(true);
   });
@@ -398,14 +577,30 @@ describe("props", () => {
     expect(m.props[0].broken).toBe(false);
     expect(distH(m.fighters[0].pos, m.props[0].pos)).toBeGreaterThanOrEqual(1.5 + C.BODY_R - 1e-6);
   });
+
+  it("stop a bullet but not a quickdraw", () => {
+    const crate = () => [{ kind: "crate" as const, pos: v3(0, 0, 0), radius: 0.75, height: 1.3, hp: 2, broken: false }];
+    const a = fight(20);
+    a.props = crate();
+    expect(hits(run(a, 30, (t) => ({ shot: t < 2 }))).length).toBe(0);
+    const b = fight(20);
+    b.props = crate();
+    run(b, C.QUICK_MIN + 2, { steady: true });
+    expect(hits(run(b, 30, (t) => ({ steady: true, shot: t < 2 }))).length).toBe(1);
+  });
 });
 
 describe("training mode", () => {
-  it("never knocks the opponent out and refills their health after a combo", () => {
-    const m = fight(2, { training: true });
+  it("skips the opening standoff, never beats the opponent, and refills their health", () => {
+    const m = createMatch(7, { training: true });
+    m.props = [];
+    run(m, C.INTRO_T);
+    expect(m.standoff).toBeNull();
+    m.fighters[0].pos = v3(0, 0, -1);
+    m.fighters[1].pos = v3(0, 0, 1);
     m.fighters[1].hp = 30;
-    const ev = run(m, 300, (t) => ({ strike: t < 70 && t % 8 < 2 }));
-    expect(has(ev, "ko")).toBe(false);
+    const ev = run(m, 300, string());
+    expect(has(ev, "verdictStart")).toBe(false);
     expect(m.fighters[1].hp).toBe(C.HP);
   });
 });
@@ -429,6 +624,7 @@ describe("AI versus AI", () => {
           throw new Error(`fighter left the arena at tick ${m.tick}`);
         }
         if (f.pips < 0 || f.pips > C.PIPS) throw new Error("pips out of range");
+        if (f.ammo < 0 || f.ammo > C.AMMO) throw new Error(`ammo out of range: ${f.ammo}`);
       }
     }
     return { m, seen };
@@ -441,28 +637,38 @@ describe("AI versus AI", () => {
     expect(a.tick).toBe(b.tick);
   });
 
-  it("plays whole matches to a knockout without breaking any invariant", () => {
+  it("plays whole matches to a verdict without breaking any invariant", () => {
     const lengths: number[] = [];
     const seenAll = new Set<string>();
+    const outcomes = { dead: 0, alive: 0 };
     let finished = 0;
+    let standoffs = 0;
     for (let seed = 1; seed <= 24; seed++) {
       const { m, seen } = play(seed, 60 * 60 * 6);
       for (const s of seen) seenAll.add(s);
       if (m.phase === "done") {
         finished++;
         lengths.push(m.tick / 60);
+        if (m.outcome) outcomes[m.outcome]++;
       }
+      if (seen.has("standoffEnd")) standoffs++;
     }
     lengths.sort((x, y) => x - y);
     const median = lengths[Math.floor(lengths.length / 2)];
     console.log(
-      `AI matches finished ${finished}/24, median ${median.toFixed(0)}s, range ${lengths[0].toFixed(0)}-${lengths.at(-1)!.toFixed(0)}s`,
+      `AI matches finished ${finished}/24, median ${median.toFixed(0)}s, range ${lengths[0].toFixed(0)}-${lengths.at(-1)!.toFixed(0)}s, dead ${outcomes.dead} alive ${outcomes.alive}`,
     );
     console.log(`event types seen: ${[...seenAll].sort().join(", ")}`);
     expect(finished).toBe(24);
+    expect(standoffs).toBe(24);
+    expect(outcomes.dead).toBeGreaterThan(0);
+    expect(outcomes.alive).toBeGreaterThan(0);
     // Every core mechanic should come up naturally in real play.
-    for (const type of ["hit", "shot", "jump", "slipOut", "chase", "chaseCatch", "groundSlam", "lasso", "cineStart", "awaken", "clashStart", "propBreak", "guardBreak", "ko"]) {
-      expect(seenAll.has(type), `expected the AI to produce "${type}"`).toBe(true);
-    }
+    const expected = [
+      "hit", "shot", "enderShot", "chamber", "reloadStart", "reloadEnd", "jump", "slipOut", "chase", "chaseCatch",
+      "groundSlam", "lasso", "cineStart", "awaken", "standoffStart", "standoffBell", "standoffEnd", "propBreak", "guardBreak",
+      "verdictStart", "ko",
+    ];
+    for (const type of expected) expect(seenAll.has(type), `expected the AI to produce "${type}"`).toBe(true);
   });
 });

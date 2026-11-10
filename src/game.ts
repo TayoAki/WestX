@@ -40,7 +40,7 @@ export class Game {
   private slowT = 0;
   private prev: [V3, V3] = [{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }];
   private slashDone = [false, false];
-  private stats = { bestCombo: 0, bestDamage: 0, fightTicks: 0 };
+  private stats = { bestCombo: 0, fightTicks: 0 };
 
   constructor(app: HTMLElement, canvas: HTMLCanvasElement) {
     const params = new URLSearchParams(location.search);
@@ -114,14 +114,11 @@ export class Game {
     this.timeScale = 1;
     this.slowT = 0;
     this.paused = false;
-    this.stats = { bestCombo: 0, bestDamage: 0, fightTicks: 0 };
+    this.stats = { bestCombo: 0, fightTicks: 0 };
     this.hud.reset(0);
     this.hud.setNames("Hunter", "Rival", mode === "training" ? "training" : this.difficulty);
     this.cam.mode = mode === "attract" ? "attract" : "duel";
-    if (mode !== "attract") {
-      this.cam.establish();
-      this.hud.announce("Ready", "small", 1500);
-    }
+    if (mode !== "attract") this.cam.establish();
     this.input.release();
     this.input.enabled = mode !== "attract";
     this.hud.setScreen(mode === "attract" ? "menu" : "fight", this.playing);
@@ -149,7 +146,7 @@ export class Game {
   private handle(e: SimEvent): void {
     this.fx.onEvent(e);
     if (this.playing) this.sfx.onEvent(e);
-    this.hud.onEvent(e, this.playing);
+    this.hud.onEvent(e, this.match, this.playing);
     switch (e.type) {
       case "propBreak":
         this.props.onBreak(e.index);
@@ -160,17 +157,16 @@ export class Game {
       case "cineHit":
         if (e.final) this.slow(0.3, 0.6);
         break;
-      case "clashEnd":
-        this.slow(0.3, 0.5);
+      case "standoffEnd":
+        // The moment after the draw hangs in the air.
+        if (e.winner >= 0) this.slow(0.2, 0.6);
+        else if (e.trade) this.slow(0.3, 0.4);
         break;
       case "ko":
-        this.slow(0.22, 1.5);
+        this.slow(e.alive ? 0.45 : 0.22, e.alive ? 0.8 : 1.5);
         break;
       case "comboEnd":
-        if (e.att === 0) {
-          this.stats.bestCombo = Math.max(this.stats.bestCombo, e.hits);
-          this.stats.bestDamage = Math.max(this.stats.bestDamage, e.damage);
-        }
+        if (e.att === 0) this.stats.bestCombo = Math.max(this.stats.bestCombo, e.hits);
         break;
       case "phase":
         if (e.phase === "done") this.finish();
@@ -184,11 +180,13 @@ export class Game {
       return;
     }
     this.input.enabled = false;
+    const alive = this.match.outcome === "alive";
     this.hud.showResult({
       won: this.match.winner === 0,
+      alive,
+      bounty: alive ? C.BOUNTY_ALIVE : C.BOUNTY_DEAD,
       seconds: this.stats.fightTicks / 60,
       bestCombo: this.stats.bestCombo,
-      bestDamage: this.stats.bestDamage,
     });
     this.hud.setScreen("result", true);
   }
@@ -254,7 +252,7 @@ export class Game {
     this.fx.update(sdt, cur, alpha);
     this.cam.update(dt, cur, this.rigs, this.fx.shake, 0);
     this.hud.update(cur, this.playing);
-    if (this.playing) this.sfx.update(cur, 0);
+    if (this.playing) this.sfx.update(cur);
     this.stage.update(dt);
     this.stage.scene.render();
   }

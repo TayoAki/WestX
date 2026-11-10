@@ -48,7 +48,7 @@ Everyone in the Territory is defined by what they do with the storm:
   ordinary steam.
 - **Witches bargain with it.** The storm answers people who know how to ask, at a price.
 - **Bounty hunters survived it.** The Struck were hit by its lightning and lived.
-  What they carry now is called Grit.
+  What they carry now is called Nerve.
 
 ### Factions
 
@@ -87,19 +87,30 @@ One hero per class at launch. The system allows more heroes per class later.
 |---|---|---|---|
 | Combat role | Rushdown all-rounder | Ranged and air control | Setup, armor, area denial |
 | Weapons | Twin revolvers, fulgur-wire lariat | Hexes, spirit familiars | Rivet gun, steam gauntlet, deployables |
-| Meter | **Grit** — also fills on precise shots | **Hex** — fills fastest, shared with flight | **Pressure** — fills on its own, can overfill and overheat |
+| Meter | **Nerve** — builds while holding steady | **Hex** — fills fastest, shared with flight | **Pressure** — fills on its own, can overfill and overheat |
 | Mobility | Lariat swing, best mounted fighter | Levitation and short flight | Jump-jet hops, steam cycle |
 | Strong against | Witch (closes the gap) | Engineer (fights from the air) | Hunter (denies space, absorbs hits) |
 | World skill | **Tracking**: reads trails, takes targets alive | **Witch-sight**: sees fulgur veins, hidden paths, speaks with the dead | **Salvage**: repairs, hacks and rebuilds machines |
 
 ### Bounty Hunter
 
-- **Lariat:** grab at range. Pull them to you or yourself to them. The main combo extender.
-- **Ricochet:** one shot that bounces between marked targets.
-- **Warrant:** mark a target for bonus damage. The mark follows them through a vanish.
-- **Dust Devil:** spinning aerial string that carries both fighters upward.
+The hunter is the most western of the three, and the only one built so far. The kit is
+a gunfight sped up to anime pace.
+
+- **Gun-fu string:** two pistol-whips and a spur kick, then an ender that fires a round
+  at point-blank range. The round is what sends them flying; with an empty cylinder
+  the ender lands as a weak pistol-whip.
+- **The cylinder:** six rounds, spent by shots and enders. When it empties, a marker
+  sweeps a gauge: hit the gold zone for a fast reload and two hot rounds, or miss and
+  wait longer.
+- **Fan the hammer:** hold the trigger to empty the cylinder in one burst.
+- **Steady:** holster and stand still. Nerve builds, rounds slide back in, and the
+  quickdraw arms.
+- **Quickdraw:** one shot from the holster. It hits harder the longer you waited, and
+  it goes through cover.
+- **Lariat:** rope them and pull them in, or zip yourself to them.
 - **Awakening — Reckoning:** everything else slows down.
-- **Ultimate — Last Word:** six shots, one cinematic.
+- **Ultimate — Last Word:** six shots, one cinematic. It leaves the cylinder empty.
 
 ### Witch
 
@@ -141,17 +152,33 @@ Every hero shares these. Class kits change what they look like and how they're t
 |---|---|
 | **Strike** | One-button melee string. Stick direction on the last hit picks the ender: launch up, blast away or slam down. |
 | **Shot** | Ranged attack usable while moving or airborne. Hold for a heavy shot. |
-| **Charge** | Hold to fill your meter with a visible aura. You are exposed while charging. |
+| **Charge** | Hold to fill your meter. You are exposed while doing it. For the hunter this is holding steady: holstered, still and quiet. |
 | **Chase** | Meter-fuelled homing dash to your target. Used to close distance and to follow an enemy you just blasted away. |
 | **Guard** | Blocks. Guard at the last instant for a **Perfect Guard** and a counter window. Guards can be broken. |
 | **Slip** | While being hit, spend a pip to vanish and reappear behind the attacker. Four pips, slow to refill. |
 | **Specials** | Four equipped moves that cost meter. |
 | **Awakening** | A temporary powered-up form, available at low health or a full gauge. |
 | **Ultimate** | A full-meter cinematic finisher. |
-| **Clash** | When two big attacks collide, both players fight a short struggle and the loser takes both. |
+| **Standoff** | Both fighters freeze and wait for a bell. The first clean draw wins. Drawing early makes your hand slow. |
+| **Verdict** | The winner decides how it ends: dead, or roped and alive for a bigger bounty. |
 
 Slip pips are the heart of duel mind-games: every combo is a question of whether the
 defender will spend one, and running out is how fights are lost.
+
+### Western beats
+
+A western is stillness, then one sudden moment. An anime fighter is constant motion.
+WestX keeps the anime speed and makes the western moments into rules:
+
+| Beat | How it plays |
+|---|---|
+| **The standoff** | Opens every duel, and happens again whenever both fighters hold steady. A bell, then a reaction contest. |
+| **The quickdraw** | Standing still is a threat, not a rest. The longer the wait, the harder the shot. |
+| **Six rounds** | Ammunition is the resource that decides what you can do next, and reloading is a timed risk. |
+| **Dead or alive** | A beaten rival drops to their knees. The winner shoots, or ropes them for double the bounty. |
+
+Still to come in this direction: a town street to fight through, powder barrels and
+dynamite to shoot, and a whistle that sends your horse charging through.
 
 ### Three kinds of fight
 

@@ -109,7 +109,9 @@
   background: var(--ember);
 }
 .meter {
-  width: 72%;
+  flex: 1 1 auto;
+  width: auto;
+  max-width: 62%;
   height: clamp(7px, 1.2vw, 11px);
 }
 .side.p0 .meter .fill {
@@ -140,8 +142,7 @@
 .side.p1 .row {
   flex-direction: row-reverse;
 }
-.pips,
-.ammo {
+.pips {
   display: flex;
   gap: 5px;
   align-items: center;
@@ -157,18 +158,47 @@
   background: var(--fulgur);
   box-shadow: 0 0 8px var(--fulgur);
 }
-.ammo b {
+
+/* The revolver's cylinder: six chambers that turn as rounds are spent. */
+.cyl {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+  border: 2px solid var(--ink);
+  transition: transform 0.12s ease-out;
+}
+.cyl b {
+  position: absolute;
+  left: 50%;
+  top: 50%;
   width: 7px;
   height: 7px;
+  margin: -3.5px;
   border-radius: 50%;
-  border: 2px solid var(--ink);
-  background: var(--ink-soft);
+  background: var(--ink);
+  transform: rotate(calc(var(--i) * 60deg)) translateY(-9px);
 }
-.ammo b.on {
+.cyl b.on {
   background: var(--paper);
 }
-.ammo.reloading b {
-  animation: blink 0.25s steps(2) infinite;
+.cyl b.hot {
+  background: var(--ember);
+  box-shadow: 0 0 6px var(--ember);
+}
+.cyl.open {
+  border-style: dashed;
+  border-color: var(--paper-dim);
+}
+.cyl.perfect {
+  animation: ringout 0.5s ease-out;
+  --ring: var(--fulgur);
+}
+.cyl.fumble {
+  animation: ringout 0.5s ease-out;
+  --ring: var(--crimson);
 }
 .label {
   font-size: 11px;
@@ -261,33 +291,120 @@
   color: var(--fulgur);
 }
 
-.clash {
+/* Reload gauge: a marker sweeping toward a gold zone. */
+.reload {
   position: absolute;
   left: 50%;
-  bottom: 22%;
-  width: min(520px, 90%);
+  bottom: 19%;
+  width: min(340px, 82%);
   transform: translateX(-50%);
   text-align: center;
+  z-index: 3;
 }
-.clash p {
+.reload p,
+.prompt {
   margin: 0 0 6px;
-  font-family: var(--display);
-  font-size: clamp(16px, 3vw, 26px);
-  text-shadow: 0 3px 0 var(--ink);
-  animation: blink 0.2s steps(2) infinite;
+  font-size: clamp(14px, 2.2vw, 18px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 0 2px 0 var(--ink), 0 0 10px var(--ink);
 }
-.clash .tug {
+.reload kbd,
+.verdict kbd {
+  font: inherit;
+  color: var(--ink);
+  background: var(--paper);
+  padding: 0 6px;
+  border-radius: 2px;
+}
+.gauge {
   position: relative;
-  height: 20px;
-  background: var(--crimson);
-  border: 3px solid var(--ink);
-  transform: skewX(-18deg);
-  overflow: hidden;
+  height: 14px;
+  background: var(--ink-soft);
+  border: 2px solid var(--ink);
 }
-.clash .tug i {
+.gauge .zone {
   position: absolute;
-  inset: 0;
+  top: 0;
+  bottom: 0;
   background: var(--gold);
+}
+.gauge .mark {
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  width: 4px;
+  margin-left: -2px;
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+.reload.tried .zone {
+  opacity: 0.3;
+}
+
+/* Standoff instructions sit just above the lower black bar. */
+.prompt {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 15%;
+  margin: 0;
+  text-align: center;
+  z-index: 3;
+}
+
+/* Dead or alive. */
+.verdict {
+  position: absolute;
+  left: 50%;
+  bottom: 16%;
+  width: min(480px, 94%);
+  transform: translateX(-50%);
+  text-align: center;
+  z-index: 3;
+}
+.verdict p {
+  margin: 0 0 8px;
+  font-family: var(--display);
+  font-size: clamp(24px, 5vw, 42px);
+  line-height: 1;
+  text-shadow: 0 4px 0 var(--ink), 0 0 16px var(--ink);
+}
+.verdict .options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+#ui .verdict button {
+  flex: 1 1 150px;
+  min-height: 44px;
+  padding: 6px 12px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: var(--ink-soft);
+  border: 2px solid var(--paper);
+  touch-action: none;
+}
+#ui .verdict button.down {
+  background: var(--paper);
+  color: var(--ink);
+}
+.verdict button b {
+  color: var(--gold);
+  margin-left: 4px;
+}
+.verdict .timer {
+  height: 5px;
+  margin-top: 8px;
+  background: var(--ink-soft);
+}
+.verdict .timer i {
+  display: block;
+  height: 100%;
+  background: var(--paper);
   transform-origin: left center;
 }
 
@@ -703,13 +820,18 @@
     width: 7px;
     height: 7px;
   }
-  .ammo b {
+  .pips {
+    gap: 4px;
+  }
+  .cyl {
+    width: 24px;
+    height: 24px;
+  }
+  .cyl b {
     width: 5px;
     height: 5px;
-  }
-  .pips,
-  .ammo {
-    gap: 4px;
+    margin: -2.5px;
+    transform: rotate(calc(var(--i) * 60deg)) translateY(-7px);
   }
 }
 @media (max-height: 460px) {
@@ -744,6 +866,14 @@
     transform: rotate(7deg);
   }
 }
+@keyframes ringout {
+  from {
+    box-shadow: 0 0 0 0 var(--ring), 0 0 14px 4px var(--ring);
+  }
+  to {
+    box-shadow: 0 0 0 12px transparent, 0 0 0 0 transparent;
+  }
+}
 @keyframes whiteout {
   from {
     opacity: 0.85;
@@ -759,8 +889,8 @@
   .whiteout.go,
   .meter.full,
   .nameplate .ready,
-  .clash p,
-  .ammo.reloading b {
+  .cyl.perfect,
+  .cyl.fumble {
     animation: none;
   }
   #app.fast .speedlines {

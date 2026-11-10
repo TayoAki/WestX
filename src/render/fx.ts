@@ -9,7 +9,6 @@ import { CreateCapsule } from "@babylonjs/core/Meshes/Builders/capsuleBuilder";
 import { CreateCylinder } from "@babylonjs/core/Meshes/Builders/cylinderBuilder";
 import { CreateDisc } from "@babylonjs/core/Meshes/Builders/discBuilder";
 import { CreatePlane } from "@babylonjs/core/Meshes/Builders/planeBuilder";
-import { CreateSphere } from "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import { CreateTorus } from "@babylonjs/core/Meshes/Builders/torusBuilder";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { ParticleSystem } from "@babylonjs/core/Particles/particleSystem";
@@ -124,13 +123,12 @@ export class Fx {
   private chunkI = 0;
   private chunkMats: Record<PropKind | "dirt", ShaderMaterial>;
   private bullets: Mesh[] = [];
-  private heavies: Mesh[] = [];
+  private quicks: Mesh[] = [];
   private ults: Mesh[] = [];
   private loops: Mesh[] = [];
   private ropes: Mesh[] = [];
-  private orb: Mesh;
-  private beams: Mesh[] = [];
   private ghostTimer = [0, 0];
+  private steadyTimer = [0, 0];
   private tmp = new Vector3();
   private tmp2 = new Vector3();
 
@@ -294,15 +292,12 @@ export class Fx {
       this.bullets.push(b);
     }
     for (let i = 0; i < 2; i++) {
-      const col = rigs[i].auraColor.toHexString();
-      const h = CreateSphere(`heavy${i}`, { diameter: 1.3, segments: 12 }, scene);
-      h.material = makeGlow(scene, `heavyMat${i}`, col);
-      const core = CreateSphere(`heavyCore${i}`, { diameter: 0.7, segments: 8 }, scene);
-      core.material = makeGlow(scene, `heavyCoreMat${i}`, "#ffffff");
-      core.parent = h;
-      h.isPickable = false;
-      h.setEnabled(false);
-      this.heavies.push(h);
+      // The quickdraw: a long white-hot streak.
+      const q = CreateBox(`quick${i}`, { width: 0.16, height: 0.16, depth: 7 }, scene);
+      q.material = makeGlow(scene, `quickMat${i}`, "#fff6d8");
+      q.isPickable = false;
+      q.setEnabled(false);
+      this.quicks.push(q);
 
       const u = CreateBox(`ult${i}`, { width: 0.5, height: 0.5, depth: 7 }, scene);
       u.material = makeGlow(scene, `ultMat${i}`, "#ffffff");
@@ -324,18 +319,7 @@ export class Fx {
       rope.setEnabled(false);
       this.ropes.push(rope);
 
-      const beam = CreateCylinder(`beam${i}`, { height: 1, diameter: 0.7, tessellation: 10 }, scene);
-      beam.rotation.x = Math.PI / 2;
-      beam.bakeCurrentTransformIntoVertices();
-      beam.material = makeGlow(scene, `beamMat${i}`, col, 0.85);
-      beam.isPickable = false;
-      beam.setEnabled(false);
-      this.beams.push(beam);
     }
-    this.orb = CreateSphere("clashOrb", { diameter: 2, segments: 14 }, scene);
-    this.orb.material = makeGlow(scene, "orbMat", "#ffffff");
-    this.orb.isPickable = false;
-    this.orb.setEnabled(false);
   }
 
   // ------------------------------------------------------------ primitives
@@ -383,9 +367,9 @@ export class Fx {
     this.shocks.spawn(pos, color, s0, s1, dur, 0.9);
   }
 
-  private groundRing(pos: Vector3, color: Color3, s0: number, s1: number, dur: number): void {
+  private groundRing(pos: Vector3, color: Color3, s0: number, s1: number, dur: number, alpha = 0.9): void {
     this.tmp.set(pos.x, 0.08, pos.z);
-    this.rings.spawn(this.tmp, color, s0, s1, dur, 0.9);
+    this.rings.spawn(this.tmp, color, s0, s1, dur, alpha);
   }
 
   private ghost(pos: Vector3, color: Color3, yaw: number, lean: number, dur = 0.22): void {
@@ -475,13 +459,56 @@ export class Fx {
       }
       case "shot": {
         const pos = vec(e.pos);
-        this.star(pos, new Color3(1, 0.9, 0.55), e.heavy ? 3 : 1.2, 0.07);
-        if (e.heavy) {
-          this.shock(pos, rigs[e.owner].auraColor, 0.5, 4, 0.22);
-          this.shake = Math.min(1.3, this.shake + 0.3);
+        const flash = new Color3(1, 0.9, 0.55);
+        if (e.kind === "quick" || e.kind === "coup") {
+          // One shot that matters: a big flash, a ring of dust at the boots.
+          this.star(pos, WHITE, 4.2, 0.12);
+          this.shock(pos, flash, 0.5, 5, 0.24);
+          this.spark(pos, 16, flash, 22, 0.3, 0.25);
+          const feet = rigs[e.owner].root.position;
+          this.groundRing(feet, SAND, 0.8, 6, 0.4);
+          this.dust(feet, 8, 1.6, 5);
+          this.shake = Math.min(1.3, this.shake + 0.45);
+        } else {
+          this.star(pos, flash, e.kind === "fan" ? 1.5 : 1.2, 0.07);
+          if (e.kind === "fan") this.shake = Math.min(1.3, this.shake + 0.07);
         }
         break;
       }
+      case "enderShot": {
+        // Point-blank: the flash sits on the target and the sparks carry on through.
+        const pos = vec(e.pos);
+        this.star(pos, new Color3(1, 0.92, 0.6), 3.4, 0.1);
+        this.tmp.set(pos.x + e.dir.x * 1.6, pos.y, pos.z + e.dir.z * 1.6);
+        this.spark(this.tmp, 20, new Color3(1, 0.85, 0.5), 24, 0.3, 0.3);
+        this.shake = Math.min(1.3, this.shake + 0.25);
+        break;
+      }
+      case "dryFire":
+        this.dust(vec(e.pos), 2, 0.5, 1);
+        break;
+      case "reloadEnd":
+        if (e.perfect) {
+          const hand = rigs[e.id].hand.getAbsolutePosition();
+          this.star(hand, FULGUR, 1.8, 0.2);
+          this.spark(hand, 10, FULGUR, 7, 0.2, 0.35);
+        }
+        break;
+      case "standoffEnd":
+        if (e.trade) {
+          // The two bullets met halfway.
+          rigs[0].center(this.tmp);
+          rigs[1].center(this.tmp2);
+          const mid = this.tmp.add(this.tmp2).scaleInPlace(0.5);
+          this.star(mid, WHITE, 5, 0.2);
+          this.shock(mid, FULGUR, 0.5, 6, 0.3);
+          this.spark(mid, 40, new Color3(1, 0.9, 0.6), 20, 0.3, 0.5);
+          this.shake = Math.min(1.3, this.shake + 0.5);
+        }
+        break;
+      case "verdictStart":
+        this.dust(vec(e.pos), 10, 1.8, 3);
+        break;
       case "slipOut": {
         const pos = vec(e.pos);
         this.shock(pos, WHITE, 0.8, 3.2, 0.2);
@@ -580,23 +607,17 @@ export class Fx {
         this.shake = Math.min(1.3, this.shake + (e.final ? 1.2 : 0.35));
         break;
       }
-      case "clashStart":
-        this.star(vec(e.pos), WHITE, 6, 0.25);
-        this.shake = Math.min(1.3, this.shake + 0.5);
-        break;
-      case "clashEnd": {
-        const pos = vec(e.pos);
-        this.star(pos, WHITE, 11, 0.35);
-        this.shock(pos, WHITE, 1, 20, 0.55);
-        this.spark(pos, 60, e.winner >= 0 ? rigs[e.winner].auraColor : WHITE, 28, 0.4, 0.5);
-        this.shake = 1.3;
-        break;
-      }
       case "ko": {
         const pos = vec(e.pos).addInPlaceFromFloats(0, 0.95, 0);
-        this.star(pos, WHITE, 10, 0.4);
-        this.shock(pos, rigs[e.winner].auraColor, 1, 18, 0.6);
-        this.shake = 1.3;
+        if (e.alive) {
+          this.shock(pos, FULGUR, 2.5, 0.6, 0.25);
+          this.dust(vec(e.pos), 12, 1.8, 4);
+          this.shake = Math.min(1.3, this.shake + 0.3);
+        } else {
+          this.star(pos, WHITE, 10, 0.4);
+          this.shock(pos, rigs[e.winner].auraColor, 1, 18, 0.6);
+          this.shake = 1.3;
+        }
         break;
       }
     }
@@ -645,13 +666,20 @@ export class Fx {
       const f = m.fighters[i];
       const rig = this.rigs[i];
       const hidden = f.state === "slip";
-      // Rising embers: dense while charging, a steady trickle while awakened.
-      let rate = 0;
-      if (f.state === "charge") rate = 170;
-      else if (f.state === "burst") rate = 260;
+        let rate = 0;
+      if (f.state === "burst") rate = 260;
       else if (f.awakened > 0) rate = 55;
-      else if (f.shotHold >= 12) rate = 30 + 60 * Math.min(1, f.shotHold / 34);
+      else if (f.state === "steady") rate = 14;
       this.auras[i].emitRate = hidden ? 0 : rate;
+
+      // Standing still stirs the dust at your boots, and nothing else.
+      if (f.state === "steady" || f.state === "standoff") {
+        this.steadyTimer[i] -= dt;
+        if (this.steadyTimer[i] <= 0) {
+          this.steadyTimer[i] = 0.55;
+          this.groundRing(rig.root.position, SAND, 0.7, 2.8, 1.0, 0.22);
+        }
+      } else this.steadyTimer[i] = 0;
       this.auraPos[i].set(rig.root.position.x, rig.root.position.y + 0.2, rig.root.position.z);
 
       // Afterimages trail any fast movement.
@@ -668,12 +696,11 @@ export class Fx {
 
     this.syncProjectiles(m, alpha);
     this.syncRopes(m);
-    this.syncClash(m, dt);
   }
 
   private syncProjectiles(m: Match, alpha: number): void {
     let b = 0;
-    const used = [false, false];
+    const usedQ = [false, false];
     const usedU = [false, false];
     const usedL = [false, false];
     for (const p of m.projectiles) {
@@ -682,11 +709,9 @@ export class Fx {
       const z = p.prev.z + (p.pos.z - p.prev.z) * alpha;
       let mesh: Mesh | undefined;
       if (p.kind === "bullet") mesh = this.bullets[b++];
-      else if (p.kind === "heavy") {
-        mesh = this.heavies[p.owner];
-        used[p.owner] = true;
-        const pulse = 1 + Math.sin(m.tick * 0.9) * 0.12;
-        mesh.scaling.setAll(pulse);
+      else if (p.kind === "quick") {
+        mesh = this.quicks[p.owner];
+        usedQ[p.owner] = true;
       } else if (p.kind === "ult") {
         mesh = this.ults[p.owner];
         usedU[p.owner] = true;
@@ -702,7 +727,7 @@ export class Fx {
     }
     for (let i = b; i < this.bullets.length; i++) this.bullets[i].setEnabled(false);
     for (let i = 0; i < 2; i++) {
-      if (!used[i]) this.heavies[i].setEnabled(false);
+      if (!usedQ[i]) this.quicks[i].setEnabled(false);
       if (!usedU[i]) this.ults[i].setEnabled(false);
       if (!usedL[i]) this.loops[i].setEnabled(false);
     }
@@ -730,33 +755,10 @@ export class Fx {
       if (lasso) {
         this.tmp.set(lasso.pos.x, lasso.pos.y, lasso.pos.z);
         this.stretch(rope, from, this.tmp);
-      } else if (o.state === "pulled" || f.state === "zip") {
+      } else if (o.state === "pulled" || o.state === "tied" || f.state === "zip") {
         this.rigs[1 - i].center(this.tmp);
         this.stretch(rope, from, this.tmp);
       } else rope.setEnabled(false);
     }
-  }
-
-  private syncClash(m: Match, dt: number): void {
-    const clash = m.clash;
-    if (!clash) {
-      this.orb.setEnabled(false);
-      this.beams[0].setEnabled(false);
-      this.beams[1].setEnabled(false);
-      return;
-    }
-    // The orb slides toward whoever is losing the struggle.
-    const lead = clash.power[0] - clash.power[1];
-    const a = this.rigs[0].hand.getAbsolutePosition();
-    const b = this.rigs[1].hand.getAbsolutePosition();
-    const k = 0.5 + Math.max(-0.4, Math.min(0.4, lead * 0.035));
-    this.tmp2.set(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, a.z + (b.z - a.z) * k);
-    this.orb.position.copyFrom(this.tmp2);
-    this.orb.scaling.setAll(1 + Math.sin(clash.t * 0.8) * 0.15 + Math.random() * 0.1);
-    this.orb.setEnabled(true);
-    this.stretch(this.beams[0], a, this.tmp2);
-    this.stretch(this.beams[1], b, this.tmp2);
-    if (Math.random() < dt * 30) this.spark(this.tmp2, 8, WHITE, 18, 0.3, 0.3);
-    this.shake = Math.max(this.shake, 0.25);
   }
 }

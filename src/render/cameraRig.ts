@@ -83,6 +83,49 @@ export class CameraRig {
         want.set(d.x - fx * 1.5 + rx * 6.5, d.y + 1.5, d.z - fz * 1.5 + rz * 6.5);
         look.set(d.x, d.y + 1.1, d.z);
       }
+    } else if (m.standoff) {
+      // The standoff gets two shots: the classic wide profile, then low over the
+      // player's holster, looking past the gun hand at the rival.
+      const dx = them.x - me.x;
+      const dz = them.z - me.z;
+      const sep = Math.max(1, Math.hypot(dx, dz));
+      const fx = dx / sep;
+      const fz = dz / sep;
+      const rx = fz;
+      const rz = -fx;
+      const phase = m.standoff.t < 56 ? 10 : 11;
+      cut = phase !== this.cinePhase;
+      this.cinePhase = phase;
+      this.yaw = Math.atan2(dx, dz);
+      rate = 1.2;
+      lookRate = 5;
+      if (phase === 10) {
+        const side = sep * 0.6 + 3 - (m.standoff.t / 56) * 0.8;
+        want.set(me.x + dx * 0.5 + rx * side, me.y + 1.15, me.z + dz * 0.5 + rz * side);
+        look.set(me.x + dx * 0.5, me.y + 1.0, me.z + dz * 0.5);
+        fov = 0.85;
+      } else {
+        want.set(me.x - fx * 2.6 + rx * 1.05, me.y + 0.82, me.z - fz * 2.6 + rz * 1.05);
+        look.set(them.x - rx * 0.9, them.y + 1.0, them.z - rz * 0.9);
+        // A long lens flattens the distance, so the rival looms.
+        fov = 0.55;
+      }
+    } else if (m.phase === "verdict") {
+      // Low behind the beaten fighter, looking up at the one deciding.
+      const loser = rigs[1 - m.winner].root.position;
+      const winner = rigs[m.winner].root.position;
+      const dx = winner.x - loser.x;
+      const dz = winner.z - loser.z;
+      const sep = Math.max(1, Math.hypot(dx, dz));
+      const fx = dx / sep;
+      const fz = dz / sep;
+      cut = this.cinePhase !== 20;
+      this.cinePhase = 20;
+      want.set(loser.x - fx * 2.7 + fz * 1.5, loser.y + 0.8, loser.z - fz * 2.7 - fx * 1.5);
+      look.set(loser.x + dx * 0.6, loser.y + 1.15, loser.z + dz * 0.6);
+      rate = 1.5;
+      lookRate = 5;
+      fov = 0.8;
     } else if (this.mode === "attract") {
       this.cinePhase = -1;
       this.orbit += dt * 0.22;
