@@ -1,8 +1,9 @@
 import type { Input } from "../input/input";
 import type { Difficulty } from "../sim/ai";
-import { KITS } from "../sim/kits";
+import { KITS, type KitId } from "../sim/kits";
 import { C } from "../sim/moves";
-import type { Button, Match, SimEvent } from "../sim/types";
+import { STATUSES, type Button, type Match, type SimEvent } from "../sim/types";
+import { CLASSES, PLAYABLE } from "./classes";
 import "./hud.css";
 
 // The HUD is plain HTML over the canvas: crisp text at any resolution and easy to restyle.
@@ -18,22 +19,10 @@ export interface ResultStats {
   bestCombo: number;
 }
 
-const MOVE_LIST = `
-  <li><kbd>W A S D</kbd> Move. W closes in, A and D circle</li>
-  <li><kbd>J</kbd> Strike. A pistol-whip, a backhand with the brace, then the brace's blast</li>
-  <li><kbd>Shift</kbd> Raise the brace. Walk behind it; bullets ring off. Tap it while being hit to catch the blow</li>
-  <li><kbd>Shift + J</kbd> Thunderclap: slow, and it goes straight through a guard</li>
-  <li><kbd>K</kbd> Shot. Hold it to fan the hammer</li>
-  <li><kbd>Q</kbd> Hold steady: builds Nerve and reloads. Press K from it for a quickdraw</li>
-  <li><kbd>L</kbd> Shoulder charge. You get two; they come back slowly</li>
-  <li><kbd>E</kbd> Lariat: rope them in. Hold S to zip to them</li>
-  <li><kbd>Space</kbd> Jump <kbd>R</kbd> Last Word <kbd>F</kbd> Awaken</li>`;
-
-const NOTES = `
-  <p class="fine"><b>You are the wall.</b> The rival is faster and has more dashes. You are heavier, you hit harder, and the brace on your left arm is both shield and cannon. Its blast spends Nerve: hold <b>W</b> on the third strike to launch them, <b>S</b> to slam them, or neither to blast them away.</p>
-  <p class="fine"><b>Time the brace.</b> Raise it just as a bullet lands and the shot goes back at the shooter.</p>
-  <p class="fine"><b>Six rounds.</b> When the cylinder runs dry, press <b>K</b> as the marker crosses the gold for a fast reload.</p>
-  <p class="fine"><b>The standoff.</b> Every duel opens with one. Wait for the bell, then shoot first.</p>`;
+/** Controls every class shares, shown under each class's own list. */
+const SHARED_MOVES = `<li><kbd>W A S D</kbd> Move. W closes in, A and D circle</li><li><kbd>Space</kbd> Jump <kbd>R</kbd> Ultimate <kbd>F</kbd> Awaken</li>`;
+const SHARED_NOTES = `<p class="fine"><b>The standoff.</b> Every duel opens with one. Wait for the bell, then shoot first.</p>`;
+const SHARED_LEGEND = `<span><kbd>Space</kbd>jump</span><span><kbd>R</kbd>ultimate</span><span><kbd>F</kbd>awaken</span><span><kbd>H</kbd>hide</span>`;
 
 const money = (n: number): string => `$${n.toLocaleString("en-US")}`;
 
@@ -49,6 +38,7 @@ interface SideEls {
   dashes: HTMLElement[];
   cyl: HTMLElement;
   chambers: HTMLElement[];
+  tags: HTMLElement[];
   combo: HTMLElement;
   comboN: HTMLElement;
   comboD: HTMLElement;
@@ -56,7 +46,7 @@ interface SideEls {
 }
 
 export class Hud {
-  onStart: (mode: "duel" | "training", difficulty: Difficulty) => void = () => {};
+  onStart: (mode: "duel" | "training", difficulty: Difficulty, kit: KitId) => void = () => {};
   onResume: () => void = () => {};
   onRematch: () => void = () => {};
   onMenu: () => void = () => {};
@@ -69,6 +59,8 @@ export class Hud {
   private announceTimer = 0;
   private legendOn = true;
   private view = 0;
+  /** The class picked on the menu. */
+  private kit: KitId = "hunter";
   private screen: Screen = "menu";
 
   constructor(
@@ -89,6 +81,7 @@ export class Hud {
           <div class="dashes" data-dashes="${i}" title="Dashes">${"<b></b>".repeat(3)}</div>
         </div>
         <div class="track awaken"><i class="fill" data-awaken="${i}"></i></div>
+        <div class="tags" data-tags="${i}">${STATUSES.map((k) => `<span class="tag ${k}" hidden>${k}</span>`).join("")}</div>
       </div>`;
     root.innerHTML = `
       <div class="letterbox top"></div>
@@ -115,21 +108,17 @@ export class Hud {
           </div>
           <div class="timer"><i data-el="verdictTimer"></i></div>
         </div>
-        <div class="legend" data-el="legend" hidden>
-          <span><kbd>J</kbd>strike</span><span><kbd>Shift</kbd>brace: walk, deflect, catch</span><span><kbd>Shift+J</kbd>thunderclap</span>
-          <span><kbd>K</kbd>shot, hold to fan</span><span><kbd>Q</kbd>steady, then K to quickdraw</span><span><kbd>L</kbd>charge</span>
-          <span><kbd>E</kbd>lariat</span><span><kbd>Space</kbd>jump</span><span><kbd>R</kbd>last word</span><span><kbd>F</kbd>awaken</span><span><kbd>H</kbd>hide</span>
-        </div>
+        <div class="legend" data-el="legend" hidden></div>
       </div>
       <div class="touch" data-el="touch" hidden>
         <div class="stickzone" data-el="stickzone"><div class="stick" data-el="stick" hidden><i data-el="knob"></i></div></div>
         <div class="pad">
-          <button class="small" data-b="steady">Steady</button>
-          <button class="small" data-b="special">Lariat</button>
+          <button class="small" data-b="steady" data-pad="steady">Steady</button>
+          <button class="small" data-b="special" data-pad="special">Lariat</button>
           <button class="small" data-b="ult">Ult</button>
           <button class="small" data-b="awaken">Awaken</button>
-          <button data-b="guard">Brace</button>
-          <button data-b="dash">Charge</button>
+          <button data-b="guard" data-pad="guard">Brace</button>
+          <button data-b="dash" data-pad="dash">Charge</button>
           <button class="big" data-b="strike">Strike</button>
           <button data-b="shot">Shot</button>
           <button data-b="jump">Jump</button>
@@ -140,7 +129,10 @@ export class Hud {
           <div class="col">
             <p class="eyebrow">Combat prototype · placeholder art</p>
             <h1>WestX<small>Duel Box</small></h1>
-            <p>A lawman with a storm-struck arm against a faster gun. You don't dance. You walk in behind the brace and end it. This build exists to answer one question: does the fighting feel right?</p>
+            <div class="choices">
+              <span class="label">Play as</span>
+              ${PLAYABLE.map((k) => `<button class="pick" data-kit="${k}" aria-pressed="false"><b>${CLASSES[k].title}</b><span>${CLASSES[k].pitch}</span></button>`).join("")}
+            </div>
             <div class="choices">
               <span class="label">Duel a rival</span>
               <button class="btn" data-start="easy">Easy</button>
@@ -153,8 +145,8 @@ export class Hud {
           </div>
           <div class="col">
             <div class="rule"></div>
-            <ul class="moves">${MOVE_LIST}</ul>
-            ${NOTES}
+            <ul class="moves" data-el="menuMoves"></ul>
+            <div data-el="menuNotes"></div>
             <p class="fine">A gamepad works too, and touch controls appear on phones. <button class="btn quiet" data-el="mute" style="flex:none;min-height:0;padding:2px 10px;font-size:14px">Sound: on</button></p>
           </div>
         </div>
@@ -171,8 +163,8 @@ export class Hud {
           </div>
           <div class="col">
             <div class="rule"></div>
-            <ul class="moves">${MOVE_LIST}</ul>
-            ${NOTES}
+            <ul class="moves" data-el="pauseMoves"></ul>
+            <div data-el="pauseNotes"></div>
           </div>
         </div>
       </div>
@@ -211,6 +203,7 @@ export class Hud {
         dashes: [...q(`[data-dashes="${i}"]`).children] as HTMLElement[],
         cyl,
         chambers: [...cyl.children] as HTMLElement[],
+        tags: [...q(`[data-tags="${i}"]`).children] as HTMLElement[],
         combo,
         comboN: combo.querySelector("b")!,
         comboD: combo.querySelector("em")!,
@@ -221,10 +214,12 @@ export class Hud {
     root.querySelectorAll<HTMLElement>("[data-start]").forEach((b) =>
       b.addEventListener("click", () => {
         const v = b.dataset.start!;
-        if (v === "training") this.onStart("training", "dummy");
-        else this.onStart("duel", v as Difficulty);
+        if (v === "training") this.onStart("training", "dummy", this.kit);
+        else this.onStart("duel", v as Difficulty, this.kit);
       }),
     );
+    root.querySelectorAll<HTMLElement>("[data-kit]").forEach((b) => b.addEventListener("click", () => this.pick(b.dataset.kit as KitId)));
+    this.pick(this.kit);
     this.el.resume.addEventListener("click", () => this.onResume());
     this.el.restart.addEventListener("click", () => this.onRematch());
     this.el.quit.addEventListener("click", () => this.onMenu());
@@ -340,6 +335,24 @@ export class Hud {
     this.el.legend.hidden = !(this.screen === "fight" && this.legendOn);
   }
 
+  /** Selects a class on the menu and shows what its buttons do. */
+  private pick(kit: KitId): void {
+    this.kit = kit;
+    this.root.querySelectorAll<HTMLElement>("[data-kit]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.kit === kit)));
+    this.showClass(kit);
+  }
+
+  /** Fills every place that describes the player's class: the lists, the legend, the touch labels. */
+  private showClass(kit: KitId): void {
+    const c = CLASSES[kit];
+    for (const where of ["menuMoves", "pauseMoves"]) this.el[where].innerHTML = c.moves + SHARED_MOVES;
+    for (const where of ["menuNotes", "pauseNotes"]) this.el[where].innerHTML = c.notes + SHARED_NOTES;
+    this.el.legend.innerHTML = c.legend + SHARED_LEGEND;
+    this.root.querySelectorAll<HTMLElement>("[data-pad]").forEach((b) => {
+      b.textContent = c.touch[b.dataset.pad as keyof typeof c.touch];
+    });
+  }
+
   setNames(player: string, rival: string, sub: string): void {
     this.root.querySelector('[data-name="0"]')!.textContent = player;
     this.root.querySelector('[data-name="1"]')!.textContent = rival;
@@ -347,8 +360,9 @@ export class Hud {
   }
 
   /** Call when a new match starts so bars snap to full with no trailing animation. */
-  reset(view: number): void {
+  reset(view: number, kit: KitId): void {
     this.view = view;
+    this.showClass(kit);
     for (const s of this.sides) {
       s.lastHits = 0;
       s.combo.hidden = true;
@@ -435,10 +449,14 @@ export class Hud {
         this.announce("Guard break", "small ember", 800);
         break;
       case "awaken":
-        this.announce(mine(e.id) ? "Reckoning" : "Rival awakens", "fulgur", 1000);
+        this.announce(mine(e.id) ? CLASSES[m.fighters[e.id].kit].awakening : "Rival awakens", "fulgur", 1000);
         break;
       case "cineStart":
-        this.announce("Last Word", "", 1300);
+        this.announce(CLASSES[m.fighters[e.att].kit].ultimate, "", 1300);
+        break;
+      case "overload":
+        this.announce("Overload", "small ember", 800);
+        this.flash();
         break;
       case "cineHit":
         if (e.final) this.flash();
@@ -506,6 +524,9 @@ export class Hud {
         s.dashes[d].classList.toggle("on", d < f.dashes);
       }
 
+      for (let t = 0; t < s.tags.length; t++) s.tags[t].hidden = f.status[STATUSES[t]] <= 0;
+      // The witch has no gun, so no cylinder.
+      s.cyl.hidden = kit.gun === "none";
       // The cylinder turns one chamber for every round spent.
       s.cyl.style.transform = `rotate(${(C.AMMO - f.ammo) * (360 / C.AMMO)}deg)`;
       s.cyl.classList.toggle("open", f.reload > 0);

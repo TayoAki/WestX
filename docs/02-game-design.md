@@ -81,20 +81,37 @@ reasons and find out what the company is building at the Eye.
 
 ## 3. The three classes
 
-One hero per class at launch. The system allows more heroes per class later.
+All three are playable. Each is defined by what it owns, and by what it cannot do
+alone. The reasoning comes from the [blueprint](05-blueprint.md).
 
-| | Bounty Hunter | Witch | Engineer |
+| | Lawman | Witch | Engineer |
 |---|---|---|---|
-| Combat role | A wall that walks: heavy, deliberate, hard to move | Ranged and air control | Setup, armor, area denial |
-| Weapons | Revolver, storm brace, fulgur-wire lariat | Hexes, spirit familiars | Rivet gun, steam gauntlet, deployables |
-| Meter | **Nerve** — builds while holding steady | **Hex** — fills fastest, shared with flight | **Pressure** — fills on its own, can overfill and overheat |
-| Mobility | Lariat swing, best mounted fighter | Levitation and short flight | Jump-jet hops, steam cycle |
-| Strong against | Witch (closes the gap) | Engineer (fights from the air) | Hunter (denies space, absorbs hits) |
+| Owns | The balance: solid at every range, no setup needed | The ground: area attacks | Conditions: poison and shock |
+| Combat role | A wall that walks: heavy, deliberate, hard to move | Keeps distance and makes you cross her circles | Wears you down, then stops you |
+| Weapons | Revolver, storm brace, fulgur-wire lariat | Staff, hexes | Rivet gun, steam gauntlet, gas |
+| Meter | **Nerve** | **Hex** | **Pressure** |
+| Health | Most | Least | Middle |
+| Mobility | Two shoulder charges, no double jump | Three blinks, a double jump, and a slow float down | Two jet dashes, a double jump |
+| Escape from a combo | Catches the blow and stays put | Vanishes behind the attacker | Plating shocks the attacker |
 | World skill | **Tracking**: reads trails, takes targets alive | **Witch-sight**: sees fulgur veins, hidden paths, speaks with the dead | **Salvage**: repairs, hacks and rebuilds machines |
 
-### Bounty Hunter
+### Conditions
 
-The hunter is the one you play, and the only class built so far. The feeling to aim
+Three conditions, each with one job:
+
+| Condition | Job | Who applies it |
+|---|---|---|
+| **Poison** | Wears health down for five seconds | Engineer: rivets and gas |
+| **Shock** | Stops a fighter where they stand, then slows them and holds their dashes | Engineer: the prod, the tesla bolt, shock plating |
+| **Hex** | Every hit against them hurts more | Witch: novas, circles, the storm, the knot |
+
+**Overload:** two different conditions on one fighter burn off together in a single
+burst. The engineer can do it alone. Once all three classes share a fight, one
+class's condition becomes another's overload, and that is what makes them a team.
+
+### Lawman
+
+The lawman is the balance between the other two. The feeling to aim
 for is a lawman who does not dance: he walks in, takes what is thrown at him, and
 ends it in a few heavy blows. Everything about the kit is limited on purpose.
 
@@ -139,26 +156,38 @@ bullets hurt him, and he cannot walk through them.
 
 ### Witch
 
-Three schools: **Dust** (wind and sand, moves enemies), **Bone** (curses and spectral
-crows and coyotes), **Dusk** (shadow-steps and gravity).
+She does not aim. Her attacks are areas, and an area shows where it will land before
+it does.
 
-- **Murder:** a homing swarm of crows.
-- **Hangman's Knot:** suspends a target in the air for a free aerial combo.
-- **Dust Wall:** blocks projectiles and breaks line of sight.
-- **Shadow-step:** teleport to a placed mark.
-- **Awakening — Witching Hour:** the sky darkens, flight is free, spells chain.
-- **Ultimate — The Long Night.**
-- Weakness: fragile up close, weak guard.
+- **Hex pulse:** her strike hits everything around her, in every direction. Two
+  pulses, then a nova that blasts, launches or slams and leaves the target hexed.
+  There is no getting behind her.
+- **Hex bolt:** her shot bends toward its target. She has no gun and nothing to
+  reload, only a short wait between casts.
+- **Circle:** hold the shot to draw a circle under the target. The ground is marked,
+  the mark fills, and then it goes off. It lingers, and a lingering circle cannot be
+  blocked.
+- **Chant, then storm:** her version of holding steady and the quickdraw. The longer
+  the chant, the harder the storm lands on wherever they are standing.
+- **Hangman's knot:** rope the target and hang them in the air, hexed.
+- **Blink:** three short teleports that return quickly.
+- **Awakening — Witching Hour. Ultimate — The Long Night.**
+- **Weakness:** the least health, a rooted guard, and a slow fall that makes her a target.
 
 ### Engineer
 
-- **Sentry:** a deployable turret.
-- **Rail Spike:** a charged piercing shot that pins targets to walls.
-- **Steam Vent:** area burst that breaks guards and spends Pressure.
-- **Magnet Mine:** drags enemies and loose metal to a point.
-- **Awakening — Ironclad:** calls in a walking frame and fights from inside it with a new moveset.
-- **Ultimate — Redline.**
-- Weakness: slow, and overheating leaves a punish window.
+He wins by what he leaves on you.
+
+- **Rivet gun:** six rivets, and every one poisons. Same cylinder and timed reload
+  as the lawman's revolver.
+- **Wrench, gauntlet, prod:** a three-hit string ending in the prod, which shocks.
+- **Pressure, then tesla:** his version of holding steady and the quickdraw. The bolt
+  does less than a bullet and leaves the target shocked.
+- **Gas canister:** a cloud at the target's feet that sits there and poisons anyone in it.
+- **Shock plating:** caught mid-combo, his armor shocks the attacker.
+- **Jet dash:** two, returning slowly.
+- **Awakening — Overpressure. Ultimate — Redline.**
+- **Weakness:** his damage arrives late. Rush him before the conditions stack.
 
 ### The posse
 

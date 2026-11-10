@@ -1,3 +1,4 @@
+import type { KitId } from "./kits";
 import { C, MOVES } from "./moves";
 import { isFlying, isStunned, kitOf } from "./match";
 import { makeRng, type Rng } from "./rng";
@@ -40,6 +41,18 @@ export const DIFFICULTY: Record<Difficulty, AIParams> = {
   easy: { guard: 0.2, perfect: 0.0, slip: 0.1, aggression: 0.3, chase: 0.1, draw: [28, 46], flinch: 0.12, accept: 0.25, reload: 0, react: 18, pause: 80 },
   normal: { guard: 0.5, perfect: 0.1, slip: 0.3, aggression: 0.7, chase: 0.6, draw: [19, 30], flinch: 0.05, accept: 0.4, reload: 0.3, react: 10, pause: 18 },
   hard: { guard: 0.75, perfect: 0.3, slip: 0.5, aggression: 0.9, chase: 0.9, draw: [13, 20], flinch: 0.02, accept: 0.5, reload: 0.7, react: 5, pause: 6 },
+};
+
+/**
+ * How each class likes to fight, as weights on the AI's choices.
+ * `melee`: closing in and striking. `ranged`: shooting. `area`: the held shot and the special.
+ * `keep`: how much it wants distance when the opponent gets close.
+ */
+const STYLE: Record<KitId, { melee: number; ranged: number; area: number; keep: number }> = {
+  hunter: { melee: 1, ranged: 0.7, area: 0.6, keep: 0 },
+  outlaw: { melee: 1, ranged: 1, area: 0.7, keep: 0.2 },
+  witch: { melee: 0.6, ranged: 1.4, area: 2.2, keep: 0.9 },
+  engineer: { melee: 0.85, ranged: 1.2, area: 1.6, keep: 0.3 },
 };
 
 type Plan =
@@ -333,14 +346,15 @@ export class AI {
       case "shoot": {
         inp.mx = this.side;
         inp.my = dh < 10 ? -0.4 : 0;
-        if (this.pt % 12 === 1) inp.shot = true;
+        if (this.pt % (kit.gun === "none" ? 28 : 12) === 1) inp.shot = true;
         if (this.pt >= this.pdur || me.reload > 0) this.setPlan("idle", this.rng.int(4, 12 + p.pause));
         break;
       }
       case "fan": {
-        // Hold the trigger and let the other hand do the work.
+        // Hold the shot: fan the hammer, or for the witch, draw a circle under them.
         inp.shot = true;
-        if (this.pt >= this.pdur || me.reload > 0 || (this.pt > 16 && me.state === "free")) {
+        const cast = me.state === "attack" && me.move === "circle";
+        if (this.pt >= this.pdur || me.reload > 0 || cast || (this.pt > 16 && me.state === "free")) {
           this.setPlan("idle", this.rng.int(6, 14 + p.pause));
         }
         break;
@@ -349,12 +363,12 @@ export class AI {
         inp.steady = true;
         // Decide once how long to wait before the quickdraw, if at all.
         if (this.quickAt < 0) this.quickAt = this.rng.chance(0.45 + p.aggression * 0.3) ? this.rng.int(C.QUICK_MIN + 6, 80) : 9999;
-        const armed = me.state === "steady" && me.t >= C.QUICK_MIN && me.ammo > 0 && me.reload === 0;
+        const armed = me.state === "steady" && me.t >= C.QUICK_MIN && (kit.gun === "none" || (me.ammo > 0 && me.reload === 0));
         const rushed = dh < 8 && op.state !== "steady";
         if (armed && (me.t >= this.quickAt || rushed) && !me.prev.shot && op.state !== "steady") {
           inp.shot = true;
           this.setPlan("idle", this.rng.int(6, 16));
-        } else if (this.pt >= this.pdur || (rushed && !armed) || (me.meter >= C.METER && me.ammo >= C.AMMO && op.state !== "steady")) {
+        } else if (this.pt >= this.pdur || (rushed && !armed) || (me.meter >= C.METER && (kit.gun === "none" || me.ammo >= C.AMMO) && op.state !== "steady")) {
           this.setPlan("idle", 2);
         }
         break;
@@ -416,27 +430,35 @@ export class AI {
 
     const options: [Plan, number, number][] = [];
     const a = p.aggression;
-    const loaded = me.reload === 0 && me.ammo > 0;
-    const wantsSteady = me.grounded && (me.meter < 70 || me.ammo < 3);
     const kit = kitOf(me);
+    const st = STYLE[me.kit];
+    const hasGun = kit.gun !== "none";
+    const loaded = !hasGun || (me.reload === 0 && me.ammo > 0);
+    // The held shot: a fanned cylinder, or a hex circle that costs Nerve.
+    const canHold = kit.hold === "circle" ? me.meter >= C.CIRCLE_COST : me.reload === 0 && me.ammo >= 3;
+    const canSpecial = me.meter >= C.LARIAT_COST;
+    const wantsSteady = me.grounded && (me.meter < 70 || (hasGun && me.ammo < 3));
     if (kit.deflect && dh > 7 && op.ammo > 0) options.push(["advance", 2.2, r.int(90, 160)]);
     if (dh > 18) {
-      options.push(["approach", 3 * a, 90], ["circle", 0.6, r.int(30, 60)]);
-      if (loaded) options.push(["shoot", 1.5, r.int(40, 80)]);
+      options.push(["approach", 3 * a * st.melee, 90], ["circle", 0.6, r.int(30, 60)]);
+      if (loaded) options.push(["shoot", 1.5 * st.ranged, r.int(40, 80)]);
       if (wantsSteady) options.push(["steady", 2.4, r.int(50, 110)]);
       else if (me.grounded) options.push(["steady", 0.7, r.int(40, 80)]);
-      if (loaded && me.ammo >= 4) options.push(["fan", 0.7, 60]);
-      if (me.meter >= C.LARIAT_COST && dh < 25) options.push(["lariat", 1.2 * a, 50]);
+      if (canHold) options.push(["fan", 0.7 * st.area, 60]);
+      if (canSpecial && dh < 25) options.push(["lariat", 1.2 * a * st.area, 50]);
     } else if (dh > 5) {
-      options.push(["approach", 3.5 * a, 70], ["circle", 1, r.int(25, 50)]);
-      if (loaded) options.push(["shoot", 1.5, r.int(30, 60)]);
-      if (me.meter >= C.LARIAT_COST) options.push(["lariat", 1.6 * a, 50]);
-      if (loaded && me.ammo >= 3) options.push(["fan", 0.8, 60]);
+      options.push(["approach", 3.5 * a * st.melee, 70], ["circle", 1, r.int(25, 50)]);
+      if (loaded) options.push(["shoot", 1.5 * st.ranged, r.int(30, 60)]);
+      if (canSpecial) options.push(["lariat", 1.6 * a * st.area, 50]);
+      if (canHold) options.push(["fan", 0.8 * st.area, 60]);
       if (wantsSteady) options.push(["steady", 1.0, r.int(40, 70)]);
     } else {
-      if (Math.abs(dy) < 1.7) options.push(["approach", 5 * a, 40]);
-      options.push(["circle", 1, r.int(20, 40)], ["retreat", 1 - a * 0.6, r.int(25, 45)], ["guard", 0.8, r.int(20, 40)]);
+      if (Math.abs(dy) < 1.7) options.push(["approach", 5 * a * st.melee, 40]);
+      options.push(["circle", 1, r.int(20, 40)], ["retreat", 1 - a * 0.6 + st.keep * 2.5, r.int(25, 45)], ["guard", 0.8, r.int(20, 40)]);
       if (dy > 2) options.push(["approach", 3, 50]);
+      // Up close, an area caster drops something on their own feet and backs out of it.
+      if (canHold && st.keep > 0.5) options.push(["fan", 1.5 * st.area, 40]);
+      if (canSpecial && kit.special !== "lariat") options.push(["lariat", 1.2 * st.area, 40]);
     }
     let total = 0;
     for (const o of options) total += o[1];

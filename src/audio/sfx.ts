@@ -154,11 +154,52 @@ export class Sfx {
         }
         break;
       case "shot":
-        if (e.kind === "quick" || e.kind === "coup") {
+        if (e.kind === "bolt") {
+          // A hex bolt is a breath, not a bang.
+          this.tone(420, 900, 0.18, 0.22, "triangle");
+          this.burst(0.16, 2400, 3, 0.14, "bandpass", 5000);
+        } else if (e.kind === "tesla") {
+          this.tone(2400, 180, 0.22, 0.4, "sawtooth");
+          this.burst(0.2, 7000, 1.5, 0.4, "highpass");
+        } else if (e.kind === "quick" || e.kind === "coup") {
           this.gun(2);
           this.ricochet();
+        } else if (e.kind === "rivet") {
+          this.burst(0.05, 1500, 2, 0.4, "bandpass");
+          this.tone(380, 160, 0.06, 0.3, "square");
         } else {
           this.gun(e.kind === "fan" ? 0.6 : 1);
+        }
+        break;
+      case "status":
+        if (e.kind === "poison") this.burst(0.35, 2600, 1.2, 0.2, "bandpass", 700);
+        else if (e.kind === "shock") {
+          this.tone(1900, 160, 0.14, 0.4, "sawtooth");
+          this.burst(0.12, 6500, 2, 0.35, "highpass");
+        } else {
+          this.tone(880, 880, 0.4, 0.16, "sine");
+          this.tone(1318, 1318, 0.5, 0.12, "sine", 0.06);
+        }
+        break;
+      case "overload":
+        this.tone(2600, 60, 0.5, 0.6, "sawtooth");
+        this.tone(140, 30, 0.6, 0.8);
+        this.burst(0.5, 4000, 0.6, 0.6, "lowpass", 120);
+        break;
+      case "zoneSpawn":
+        // A rising note for as long as the fuse burns.
+        this.tone(e.kind === "gas" ? 160 : 220, e.kind === "gas" ? 240 : 660, Math.max(0.15, e.fuse / 60), 0.16, "triangle");
+        break;
+      case "zoneErupt":
+        if (e.kind === "storm") {
+          this.tone(170, 26, 0.8, 0.95);
+          this.burst(0.7, 3000, 0.5, 0.7, "lowpass", 80);
+          this.burst(0.25, 7000, 1.5, 0.4, "highpass");
+        } else if (e.kind === "gas") {
+          this.burst(0.7, 1800, 0.8, 0.35, "bandpass", 500);
+        } else {
+          this.tone(300, 60, 0.4, 0.6);
+          this.tone(660, 990, 0.35, 0.2, "triangle");
         }
         break;
       case "enderShot":

@@ -513,6 +513,33 @@ const PARRIED = pose({
   knR: [0.6, 0, 0],
 });
 
+// The witch gathers her arms in, then throws them wide as the pulse goes out.
+const PULSE_WIND = pose({
+  y: -0.1,
+  spine: [0.22, 0, 0],
+  head: [0.2, 0, 0],
+  shL: [-1.0, 0, 0.7],
+  elL: [-1.6, 0, 0],
+  shR: [-1.0, 0, -0.7],
+  elR: [-1.6, 0, 0],
+  hipL: [-0.2, 0, -0.1],
+  knL: [0.4, 0, 0],
+  hipR: [0.1, 0, 0.1],
+  knR: [0.4, 0, 0],
+});
+// Chanting: arms raised to the sky, head back.
+const CHANT = pose({
+  y: 0.04,
+  spine: [-0.12, 0, 0],
+  head: [-0.35, 0, 0],
+  shL: [-2.5, 0, -0.5],
+  elL: [-0.3, 0, 0],
+  shR: [-2.5, 0, 0.5],
+  elR: [-0.3, 0, 0],
+  hipL: [0, 0, -0.12],
+  hipR: [0, 0, 0.12],
+});
+
 // The hunter's arm strikes mirror the outlaw's gun-hand ones onto the brace.
 const ARM_WIND = { ...mirror(S1_WIND), y: -0.2 };
 const ARM_HIT = mirror(BLAST_HIT);
@@ -612,10 +639,39 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
       switch (f.move) {
         case "s1":
         case "w1":
+        case "e1":
           res.pose = strike(S1_WIND, S1_HIT, f.mf, from, mv!.total);
           break;
         case "a2":
+        case "e2":
           res.pose = strike(S2_WIND, S2_HIT, f.mf, from, mv!.total);
+          break;
+        case "h1":
+        case "h2":
+        case "novaBlast":
+          res.pose = strike(PULSE_WIND, BURST, f.mf, from, mv!.total);
+          break;
+        case "novaLaunch":
+          res.pose = strike(PULSE_WIND, CHANT, f.mf, from, mv!.total);
+          break;
+        case "novaSlam":
+          res.pose = strike(SLAM_WIND, SLAM_HIT, f.mf, from, mv!.total);
+          break;
+        case "circle":
+          // Arms up to draw it, then down to set it.
+          res.pose = f.mf < mv!.fireAt! ? CHANT : SLAM_HIT;
+          break;
+        case "canister":
+          res.pose = f.mf < mv!.fireAt! ? LARIAT_WIND : LARIAT_THROW;
+          break;
+        case "prodBlast":
+          res.pose = strike(BLAST_WIND, BLAST_HIT, f.mf, from, mv!.total);
+          break;
+        case "prodLaunch":
+          res.pose = strike(LAUNCH_WIND, LAUNCH_HIT, f.mf, from, mv!.total);
+          break;
+        case "prodSlam":
+          res.pose = strike(SLAM_WIND, SLAM_HIT, f.mf, from, mv!.total);
           break;
         case "armBlast":
           res.pose = strike(ARM_WIND, ARM_HIT, f.mf, from, mv!.total);
@@ -737,7 +793,7 @@ export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number)
       res.rate = 16;
       break;
     case "steady":
-      res.pose = { ...STEADY, spine: [0.02, Math.sin(t * 1.3) * 0.03, 0] };
+      res.pose = f.kit === "witch" ? { ...CHANT, y: 0.04 + Math.sin(t * 2.2) * 0.03 } : { ...STEADY, spine: [0.02, Math.sin(t * 1.3) * 0.03, 0] };
       res.rate = 12;
       res.holstered = true;
       break;

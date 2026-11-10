@@ -22,7 +22,7 @@ Each phase ends at a gate. If the gate fails, fix it before moving on.
 |---|---|---|---|---|
 | 0 | **Setup** | Done | Project, build, tests | You can press Play |
 | 1 | **Duel Box** | First playable built; waiting on a playtest | One arena, the hunter's full kit, a rival that fights back | The fight is fun for ten minutes with placeholder art |
-| 2 | **The Posse** | Not started | Witch and engineer kits, tag and assist, a Titan prototype | Three classes feel different, and a duel is worth replaying |
+| 2 | **The Posse** | Started: all three classes are playable in duels | Group fights, swapping between the three, a Titan prototype | Three classes feel different, and they are stronger together |
 | 3 | **Vertical slice** | Not started | Gallows Reach: 1–2 km², one town, the bounty loop, horses, real character art | 30–45 minutes someone else can play and wants more of |
 | 4 | **Production** | Not started | Second region, story, bounty roster, progression, music | Content-complete for early access |
 | 5 | **Online** | Not started | Posse co-op, then Showdown duels | Stable three-player sessions |
@@ -34,7 +34,9 @@ isn't fun here, nothing built on top will save it.
 
 ### Phase 1: what exists
 
-- Two kits: the heavy hunter you play, and a quick outlaw as the rival
+- Three playable classes: the lawman, the witch and the engineer, plus a quick outlaw as a rival
+- Area attacks: zones that mark the ground, go off after a warning, and can linger
+- Three conditions, each with a job: poison, shock and hex. Two on one fighter overload
 - The hunter's brace: walk behind it, deflect and return shots, catch a blow mid-combo, and discharge it as a blast or a guard-breaking thunderclap
 - Short, heavy strike strings ending in a blast, a launch or a slam
 - A six-round cylinder, a timed reload with a perfect window, and fanning the hammer
@@ -53,8 +55,12 @@ isn't fun here, nothing built on top will save it.
 ### Phase 1: what is missing or unproven
 
 - The art is placeholder and the animation is generated from key poses.
-- Only the hunter is playable. The outlaw is the rival's kit.
-- The two kits are not balanced: with the AI playing both, the hunter wins about three duels in four.
+- Every fight is one-on-one. The witch's circles and the engineer's gas are built for
+  crowds and have only ever had one target. Group fights are the next thing to build.
+- The three classes never share a fight, so one class cannot yet set up another.
+- Balance is rough. With the AI playing every class against every other, the engineer
+  wins most, then the lawman, then the witch.
+- The witch and engineer reuse the lawman's awakening and ultimate under their own names.
 - The arena is open desert. A town street, powder barrels, dynamite and the horse
   are the next western pieces.
 - There is no music.
@@ -86,7 +92,7 @@ isn't fun here, nothing built on top will save it.
 
 | # | Question | Why it matters |
 |---|---|---|
-| 1 | Does the fight feel right, and does it feel western now? What feels slow, floaty, unfair or confusing? | This is the Phase 1 gate |
+| 1 | Do the three classes feel different from each other? Which is the most fun, and which the least? | This is the Phase 2 gate |
 | 2 | What device did you play on, and did it run smoothly? | I cannot measure frame rate here |
 | 3 | More flight, or keep it grounded with air combos? | Sets how close this plays to each of your two references |
 | 4 | Three fixed heroes, or a create-your-own character per class? | Changes how Phase 2 is built |

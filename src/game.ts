@@ -3,13 +3,15 @@ import { Input } from "./input/input";
 import { CameraRig } from "./render/cameraRig";
 import { Fx } from "./render/fx";
 import { PropsView } from "./render/propsView";
-import { PALETTES, Rig } from "./render/rig";
+import { KIT_PALETTE, Rig } from "./render/rig";
 import { createStage, type Stage } from "./render/stage";
 import { AI, type Difficulty } from "./sim/ai";
+import type { KitId } from "./sim/kits";
 import { createMatch, stepMatch } from "./sim/match";
 import { C, MOVES } from "./sim/moves";
 import type { InputFrame, Match, SimEvent } from "./sim/types";
 import { clone, type V3 } from "./sim/vec";
+import { CLASSES, PLAYABLE } from "./ui/classes";
 import { Hud } from "./ui/hud";
 
 // Ties the simulation to the screen. The sim advances in fixed 1/60 s ticks;
@@ -19,7 +21,7 @@ export type Mode = "attract" | "duel" | "training";
 
 export class Game {
   readonly stage: Stage;
-  readonly rigs: [Rig, Rig];
+  rigs: [Rig, Rig];
   readonly fx: Fx;
   readonly props: PropsView;
   readonly cam: CameraRig;
@@ -30,6 +32,8 @@ export class Game {
   match!: Match;
   mode: Mode = "attract";
   difficulty: Difficulty = "normal";
+  /** The class the player picked. */
+  kit: KitId = "hunter";
   paused = false;
   /** Test hook: when set, replaces the player's input. */
   inputOverride: InputFrame | null = null;
@@ -46,17 +50,18 @@ export class Game {
     const params = new URLSearchParams(location.search);
     this.stage = createStage(canvas, params.has("lowres"));
     const scene = this.stage.scene;
-    this.rigs = [new Rig(scene, 0, PALETTES[0], "hunter"), new Rig(scene, 1, PALETTES[1], "outlaw")];
+    this.rigs = [new Rig(scene, 0, KIT_PALETTE.hunter, "hunter"), new Rig(scene, 1, KIT_PALETTE.outlaw, "outlaw")];
     this.fx = new Fx(scene, this.stage, this.rigs);
     this.props = new PropsView(scene);
     this.cam = new CameraRig(this.stage.camera);
     this.input = new Input(canvas);
     this.hud = new Hud(app, this.input);
 
-    this.hud.onStart = (mode, difficulty) => {
+    this.hud.onStart = (mode, difficulty, kit) => {
       this.sfx.unlock();
       this.sfx.click();
       this.difficulty = difficulty;
+      this.kit = kit;
       this.start(mode);
     };
     this.hud.onResume = () => this.setPaused(false);
@@ -100,8 +105,18 @@ export class Game {
   start(mode: Mode): void {
     this.mode = mode;
     const seed = (Math.random() * 1e9) | 0;
-    const m = createMatch(seed, { training: mode === "training" });
+    // The rival is always a different class from you. Behind the menu, any two classes fight.
+    const pick = <T,>(list: T[]): T => list[Math.floor(Math.random() * list.length)];
+    const first: KitId = mode === "attract" ? pick(PLAYABLE) : this.kit;
+    const others: KitId[] = [...PLAYABLE.filter((k) => k !== first), ...(mode === "attract" ? [] : (["outlaw"] as KitId[]))];
+    const kits: [KitId, KitId] = [first, mode === "training" ? "outlaw" : pick(others)];
+    const m = createMatch(seed, { training: mode === "training", kits });
     this.match = m;
+    // New classes mean new bodies.
+    for (const rig of this.rigs) rig.dispose();
+    const scene = this.stage.scene;
+    this.rigs = [new Rig(scene, 0, KIT_PALETTE[kits[0]], kits[0]), new Rig(scene, 1, KIT_PALETTE[kits[1]], kits[1])];
+    this.fx.setRigs(this.rigs);
     this.ais =
       mode === "attract"
         ? [AI.create(0, "normal", seed + 1), AI.create(1, "hard", seed + 2)]
@@ -115,8 +130,8 @@ export class Game {
     this.slowT = 0;
     this.paused = false;
     this.stats = { bestCombo: 0, fightTicks: 0 };
-    this.hud.reset(0);
-    this.hud.setNames("Hunter", "Rival", mode === "training" ? "training" : this.difficulty);
+    this.hud.reset(0, kits[0]);
+    this.hud.setNames(CLASSES[kits[0]].title, CLASSES[kits[1]].title, mode === "training" ? "training" : this.difficulty);
     this.cam.mode = mode === "attract" ? "attract" : "duel";
     if (mode !== "attract") this.cam.establish();
     this.input.release();

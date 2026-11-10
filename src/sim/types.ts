@@ -79,6 +79,22 @@ export type MoveId =
   | "armLaunch"
   | "armSlam"
   | "thunderclap"
+  // The witch: two hex pulses around her, then a nova.
+  | "h1"
+  | "h2"
+  | "novaBlast"
+  | "novaLaunch"
+  | "novaSlam"
+  /** Laying a hex circle on the ground under the target. */
+  | "circle"
+  // The engineer: wrench, gauntlet, then the shock prod.
+  | "e1"
+  | "e2"
+  | "prodBlast"
+  | "prodLaunch"
+  | "prodSlam"
+  /** Lobbing a gas canister at the target's feet. */
+  | "canister"
   // The outlaw.
   | "s1"
   | "s2"
@@ -93,6 +109,16 @@ export type MoveId =
   | "coup";
 
 export type HitEffect = "reel" | "launch" | "blast" | "slam" | "stagger";
+
+/**
+ * Conditions a fighter can be put under.
+ *  - poison: steady damage over time.
+ *  - shock: a short stun when it lands, then slowed, with dashes that will not recharge.
+ *  - hex: every hit hurts more.
+ * Two different conditions on one fighter react: an overload.
+ */
+export const STATUSES = ["poison", "shock", "hex"] as const;
+export type StatusId = (typeof STATUSES)[number];
 
 export interface Combo {
   hits: number;
@@ -122,6 +148,8 @@ export interface Fighter {
   dashes: number;
   dashTimer: number;
   guardHp: number;
+  /** Frames left of each condition. */
+  status: Record<StatusId, number>;
   /** Awakening gauge, 0..100. */
   awaken: number;
   /** Frames of awakening left. */
@@ -185,7 +213,7 @@ export interface Fighter {
   combo: Combo;
 }
 
-export type ProjKind = "bullet" | "quick" | "lasso" | "ult";
+export type ProjKind = "bullet" | "quick" | "lasso" | "ult" | "bolt";
 
 export interface Projectile {
   id: number;
@@ -197,6 +225,31 @@ export interface Projectile {
   life: number;
   radius: number;
   damage: number;
+  /** A condition the shot carries. */
+  status?: StatusId;
+  /** How sharply it can turn toward its target each tick, in radians. Zero flies straight. */
+  homing: number;
+}
+
+export type ZoneKind = "hex" | "storm" | "gas";
+
+/** An area on the ground that hurts anyone but its owner: the witch's circles, the engineer's gas. */
+export interface Zone {
+  id: number;
+  kind: ZoneKind;
+  owner: number;
+  pos: V3;
+  radius: number;
+  /** Frames until it goes off. The area is marked on the ground meanwhile. */
+  fuse: number;
+  /** Frames it lingers after going off. */
+  life: number;
+  /** Damage when it goes off. */
+  burst: number;
+  /** While it lingers, it hurts this often and this much. */
+  every: number;
+  tick: number;
+  status: StatusId | null;
 }
 
 export type PropKind = "crate" | "barrel" | "cactus" | "rock";
@@ -233,7 +286,7 @@ export interface Verdict {
   at: number;
 }
 
-export type ShotKind = "bullet" | "fan" | "quick" | "coup";
+export type ShotKind = "bullet" | "fan" | "quick" | "coup" | "bolt" | "rivet" | "tesla";
 
 export type SimEvent =
   | { type: "phase"; phase: Match["phase"] }
@@ -258,6 +311,13 @@ export type SimEvent =
   | { type: "deflect"; id: number; pos: V3; back: boolean }
   /** The hunter caught a blow mid-combo. */
   | { type: "armCatch"; id: number; pos: V3 }
+  | { type: "zoneSpawn"; id: number; kind: ZoneKind; owner: number; pos: V3; radius: number; fuse: number; life: number }
+  | { type: "zoneErupt"; id: number; kind: ZoneKind; pos: V3; radius: number }
+  | { type: "zoneEnd"; id: number }
+  /** A condition took hold of a fighter. */
+  | { type: "status"; id: number; kind: StatusId; pos: V3 }
+  /** Two conditions met on one fighter. */
+  | { type: "overload"; id: number; pos: V3 }
   | { type: "dryFire"; id: number; pos: V3 }
   /** A round slid into the cylinder while holding steady. */
   | { type: "chamber"; id: number }
@@ -308,6 +368,8 @@ export interface Match {
   projectiles: Projectile[];
   nextProjId: number;
   props: Prop[];
+  zones: Zone[];
+  nextZoneId: number;
   /** Frames of freeze left after a hit. */
   hitstop: number;
   cine: Cine | null;

@@ -1,4 +1,4 @@
-import type { HitEffect, MoveId } from "./types";
+import type { HitEffect, MoveId, StatusId, ZoneKind } from "./types";
 
 // Every attack is data. Timings are in frames at 60 per second.
 // Tuning a move means editing a row here; no other code changes.
@@ -21,6 +21,10 @@ export interface HitBox {
   strength: number;
   /** Nerve the attacker gains on hit. */
   meter: number;
+  /** Hits everything within `range` in every direction, not just in front. */
+  aoe?: boolean;
+  /** A condition the hit leaves behind. */
+  status?: StatusId;
 }
 
 export interface MoveDef {
@@ -190,6 +194,133 @@ export const MOVES: Record<MoveId, MoveDef> = {
     cancelHit: 16,
     cancelWhiff: NEVER,
   },
+  // The witch does not aim. Her pulses hit everything around her, so there is no getting behind her.
+  h1: {
+    id: "h1",
+    total: 24,
+    lunge: { from: 1, to: 6, speed: 12 },
+    hits: [
+      { from: 7, to: 10, range: 3.6, aoe: true, damage: 28, effect: "reel", stun: 24, blockstun: 12, guardDamage: 8, hitstop: 4, strength: 1, meter: 5 },
+    ],
+    cancelHit: 11,
+    cancelWhiff: 16,
+    next: "h2",
+  },
+  h2: {
+    id: "h2",
+    total: 26,
+    lunge: { from: 1, to: 6, speed: 12 },
+    hits: [
+      { from: 8, to: 11, range: 3.8, aoe: true, damage: 34, effect: "reel", stun: 28, blockstun: 14, guardDamage: 10, hitstop: 5, strength: 2, meter: 6 },
+    ],
+    cancelHit: 12,
+    cancelWhiff: 18,
+    next: "ender",
+  },
+  novaBlast: {
+    id: "novaBlast",
+    total: 44,
+    nerve: 15,
+    hits: [
+      { from: 12, to: 15, range: 4.6, aoe: true, damage: 88, effect: "blast", stun: 0, blockstun: 20, guardDamage: 26, hitstop: 12, strength: 3, meter: 0, status: "hex" },
+    ],
+    cancelHit: 18,
+    cancelWhiff: NEVER,
+  },
+  novaLaunch: {
+    id: "novaLaunch",
+    total: 42,
+    nerve: 15,
+    hits: [
+      { from: 10, to: 13, range: 4.4, aoe: true, damage: 74, effect: "launch", stun: 0, blockstun: 18, guardDamage: 22, hitstop: 10, strength: 3, meter: 0, status: "hex" },
+    ],
+    cancelHit: 15,
+    cancelWhiff: NEVER,
+    jumpCancel: true,
+  },
+  novaSlam: {
+    id: "novaSlam",
+    total: 42,
+    nerve: 15,
+    hits: [
+      { from: 12, to: 15, range: 4.6, aoe: true, damage: 80, effect: "slam", stun: 0, blockstun: 20, guardDamage: 26, hitstop: 12, strength: 3, meter: 0, status: "hex" },
+    ],
+    cancelHit: 18,
+    cancelWhiff: NEVER,
+  },
+  circle: {
+    id: "circle",
+    total: 34,
+    hits: [],
+    fireAt: 10,
+    cancelHit: NEVER,
+    cancelWhiff: NEVER,
+  },
+  // The engineer: a wrench, a steam gauntlet, then the prod that leaves them shocked.
+  e1: {
+    id: "e1",
+    total: 22,
+    lunge: { from: 1, to: 6, speed: 30 },
+    hits: [
+      { from: 6, to: 9, range: 2.4, damage: 28, effect: "reel", stun: 24, blockstun: 13, guardDamage: 8, hitstop: 5, strength: 1, meter: 5 },
+    ],
+    cancelHit: 10,
+    cancelWhiff: 16,
+    next: "e2",
+  },
+  e2: {
+    id: "e2",
+    total: 26,
+    lunge: { from: 1, to: 7, speed: 20 },
+    hits: [
+      { from: 7, to: 10, range: 2.5, damage: 36, effect: "reel", stun: 28, blockstun: 15, guardDamage: 12, hitstop: 7, strength: 2, meter: 6 },
+    ],
+    cancelHit: 11,
+    cancelWhiff: 19,
+    next: "ender",
+  },
+  prodBlast: {
+    id: "prodBlast",
+    total: 42,
+    nerve: 15,
+    lunge: { from: 1, to: 9, speed: 18 },
+    hits: [
+      { from: 11, to: 14, range: 2.8, damage: 64, effect: "blast", stun: 0, blockstun: 20, guardDamage: 26, hitstop: 12, strength: 3, meter: 0, status: "shock" },
+    ],
+    cancelHit: 17,
+    cancelWhiff: NEVER,
+  },
+  prodLaunch: {
+    id: "prodLaunch",
+    total: 40,
+    nerve: 15,
+    lunge: { from: 1, to: 8, speed: 18 },
+    hits: [
+      { from: 9, to: 12, range: 2.7, damage: 60, effect: "launch", stun: 0, blockstun: 18, guardDamage: 22, hitstop: 10, strength: 3, meter: 0, status: "shock" },
+    ],
+    cancelHit: 14,
+    cancelWhiff: NEVER,
+    jumpCancel: true,
+  },
+  prodSlam: {
+    id: "prodSlam",
+    total: 40,
+    nerve: 15,
+    lunge: { from: 1, to: 9, speed: 18 },
+    hits: [
+      { from: 11, to: 14, range: 2.8, damage: 66, effect: "slam", stun: 0, blockstun: 20, guardDamage: 26, hitstop: 12, strength: 3, meter: 0, status: "shock" },
+    ],
+    cancelHit: 17,
+    cancelWhiff: NEVER,
+  },
+  canister: {
+    id: "canister",
+    total: 34,
+    hits: [],
+    fireAt: 10,
+    cancelHit: NEVER,
+    cancelWhiff: NEVER,
+  },
   /** Out of the holster and fired in one motion. */
   quickdraw: {
     id: "quickdraw",
@@ -254,6 +385,32 @@ export const PROJ_HITS: Record<"bullet" | "quick", HitBox> = {
   quick: { from: 0, to: 0, range: 0, damage: 70, effect: "blast", stun: 0, blockstun: 20, guardDamage: 50, hitstop: 9, strength: 3, meter: 12 },
 };
 
+/** A homing hex bolt, the witch's basic shot. */
+export const BOLT_HIT: HitBox = { from: 0, to: 0, range: 0, damage: 42, effect: "reel", stun: 16, blockstun: 8, guardDamage: 8, hitstop: 3, strength: 1, meter: 5 };
+
+export interface ZoneDef {
+  radius: number;
+  fuse: number;
+  life: number;
+  burst: number;
+  /** What going off does to anyone caught in it. */
+  effect: HitEffect;
+  stun: number;
+  every: number;
+  tick: number;
+  status: StatusId | null;
+}
+
+/** Areas. The fuse is the warning: the ground is marked before anything happens. */
+export const ZONES: Record<ZoneKind, ZoneDef> = {
+  // The witch's circle: goes off under you, then lingers and keeps you hexed.
+  hex: { radius: 4.2, fuse: 34, life: 150, burst: 80, effect: "stagger", stun: 40, every: 30, tick: 12, status: "hex" },
+  // Her storm: a bigger area, one hard strike, nothing left behind. Its damage scales with how long she chanted.
+  storm: { radius: 6, fuse: 20, life: 14, burst: 125, effect: "blast", stun: 0, every: 0, tick: 0, status: "hex" },
+  // The engineer's gas: little at first, then it sits there and poisons the ground.
+  gas: { radius: 4.5, fuse: 20, life: 210, burst: 20, effect: "reel", stun: 14, every: 20, tick: 4, status: "poison" },
+};
+
 /** Tunable constants. Distances in metres, speeds in metres per second, times in frames. */
 export const C = {
   DT: 1 / 60,
@@ -301,6 +458,30 @@ export const C = {
   FAN_GAP: 5,
   FAN_DMG: 0.8,
   FAN_RECOVER: 16,
+
+  // Conditions.
+  POISON_T: 300,
+  POISON_EVERY: 20,
+  POISON_DMG: 5,
+  SHOCK_T: 180,
+  /** The stun when shock first lands. It will not stun again until it has worn off. */
+  SHOCK_STUN: 24,
+  SHOCK_SLOW: 0.72,
+  HEX_T: 300,
+  HEX_DMG: 1.2,
+  /** Two different conditions on one fighter burn off together. */
+  OVERLOAD_DMG: 100,
+
+  // The witch's bolts and circles, and the engineer's rivets and gas.
+  BOLT_SPEED: 32,
+  BOLT_LIFE: 170,
+  BOLT_TURN: 0.06,
+  BOLT_CD: 26,
+  CIRCLE_COST: 20,
+  RIVET_DMG: 8,
+  TESLA_DMG_MIN: 40,
+  TESLA_DMG_MAX: 75,
+  KNOT_STUN: 70,
 
   // Holding steady.
   STEADY_STARTUP: 8,

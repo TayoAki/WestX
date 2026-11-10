@@ -159,6 +159,60 @@
   box-shadow: 0 0 8px var(--fulgur);
 }
 
+/* Conditions a fighter is under, as small coloured tags below their bars. */
+.tags {
+  display: flex;
+  gap: 5px;
+  min-height: 16px;
+}
+.tag {
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink);
+  animation: blink 0.6s steps(2) infinite;
+}
+.tag.poison {
+  background: #9be34a;
+}
+.tag.shock {
+  background: #bff6ff;
+}
+.tag.hex {
+  background: #c77dff;
+}
+
+/* Class picker on the menu. */
+#ui .pick {
+  flex: 1 1 150px;
+  min-width: 0;
+  padding: 8px 10px;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 2px solid var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+#ui .pick b {
+  font-family: var(--display);
+  font-weight: 400;
+  font-size: 20px;
+}
+#ui .pick span {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+#ui .pick[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 0 5px 0 #b3401f;
+}
+
 /* Dash charges: chevrons that empty as you spend them. */
 .dashes {
   display: flex;
@@ -909,7 +963,8 @@
   .meter.full,
   .nameplate .ready,
   .cyl.perfect,
-  .cyl.fumble {
+  .cyl.fumble,
+  .tag {
     animation: none;
   }
   #app.fast .speedlines {

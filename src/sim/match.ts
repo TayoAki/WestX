@@ -1,5 +1,5 @@
 import { KITS, type Kit, type KitId } from "./kits";
-import { C, dryEnder, MOVES, PROJ_HITS, TACKLE, type HitBox } from "./moves";
+import { BOLT_HIT, C, dryEnder, MOVES, PROJ_HITS, TACKLE, ZONES, type HitBox } from "./moves";
 import { makeRng } from "./rng";
 import {
   BUTTONS,
@@ -17,6 +17,10 @@ import {
   type PropKind,
   type ShotKind,
   type SimEvent,
+  STATUSES,
+  type StatusId,
+  type Zone,
+  type ZoneKind,
 } from "./types";
 import {
   add,
@@ -106,6 +110,7 @@ function createFighter(id: number, name: string, kit: KitId, pos: V3, yaw: numbe
     dashes: k.dashes,
     dashTimer: 0,
     guardHp: C.GUARD_HP,
+    status: { poison: 0, shock: 0, hex: 0 },
     awaken: 0,
     awakened: 0,
     comebackUsed: false,
@@ -181,6 +186,8 @@ export function createMatch(seed: number, opts: Partial<MatchOptions> = {}): Mat
     projectiles: [],
     nextProjId: 1,
     props: [],
+    zones: [],
+    nextZoneId: 1,
     hitstop: 0,
     cine: null,
     standoff: null,
@@ -267,6 +274,90 @@ function setBlasted(def: Fighter, dir: V3, power = 1): void {
   def.pos.y = Math.max(def.pos.y, 0.05);
 }
 
+// ---------------------------------------------------------------- conditions and areas
+
+/** Puts a fighter under a condition. A second, different condition reacts with the first. */
+function applyStatus(m: Match, f: Fighter, kind: StatusId): void {
+  if (m.phase !== "fight" || f.hp <= 0) return;
+  const fresh = f.status[kind] === 0;
+  f.status[kind] = kind === "poison" ? C.POISON_T : kind === "shock" ? C.SHOCK_T : C.HEX_T;
+  if (!fresh) return;
+  m.events.push({ type: "status", id: f.id, kind, pos: centerOf(f) });
+  if (STATUSES.filter((k) => f.status[k] > 0).length >= 2) return overload(m, f);
+  // Shock stops you where you stand, the first time it lands.
+  if (kind === "shock" && canBeHit(f) && !isStunned(f)) {
+    setState(f, "stagger", C.SHOCK_STUN);
+    f.vel = v3();
+  }
+}
+
+/** Two conditions burn off together in one burst. This is what the classes set up for each other. */
+function overload(m: Match, f: Fighter): void {
+  const o = m.fighters[1 - f.id];
+  for (const k of STATUSES) f.status[k] = 0;
+  dealDamage(m, o, f, C.OVERLOAD_DMG);
+  o.combo.hits++;
+  f.hitsTaken++;
+  m.hitstop = Math.max(m.hitstop, 12);
+  m.events.push({ type: "overload", id: f.id, pos: centerOf(f) });
+  const dir = toTarget(o, f);
+  if (f.hp <= 0) return defeat(m, f, dir);
+  if (canBeHit(f) && !isFlying(f)) setBlasted(f, dir, 0.5);
+}
+
+/** Marks an area on the ground. It goes off after its fuse, and some kinds linger. */
+function spawnZone(m: Match, f: Fighter, kind: ZoneKind, at: V3, power = 1): void {
+  const d = ZONES[kind];
+  const pos = v3(at.x, 0, at.z);
+  const r = lenH(pos);
+  if (r > C.ARENA_R - 1) {
+    pos.x *= (C.ARENA_R - 1) / r;
+    pos.z *= (C.ARENA_R - 1) / r;
+  }
+  const z: Zone = { id: m.nextZoneId++, kind, owner: f.id, pos, radius: d.radius, fuse: d.fuse, life: d.life, burst: d.burst * power, every: d.every, tick: d.tick, status: d.status };
+  m.zones.push(z);
+  m.events.push({ type: "zoneSpawn", id: z.id, kind, owner: f.id, pos: clone(pos), radius: z.radius, fuse: z.fuse, life: z.life });
+}
+
+const inZone = (z: Zone, f: Fighter): boolean => distH(z.pos, f.pos) <= z.radius + C.BODY_R * 0.5 && f.pos.y < 4;
+
+function clearZones(m: Match): void {
+  for (const z of m.zones) m.events.push({ type: "zoneEnd", id: z.id });
+  m.zones = [];
+}
+
+function updateZones(m: Match): void {
+  for (const z of m.zones) {
+    if (m.phase !== "fight") return;
+    const att = m.fighters[z.owner];
+    const def = m.fighters[1 - z.owner];
+    const away = normH(sub(def.pos, z.pos), toTarget(att, def));
+    if (z.fuse > 0) {
+      z.fuse--;
+      if (z.fuse > 0) continue;
+      m.events.push({ type: "zoneErupt", id: z.id, kind: z.kind, pos: clone(z.pos), radius: z.radius });
+      if (inZone(z, def)) {
+        const d = ZONES[z.kind];
+        const hb: HitBox = { from: 0, to: 0, range: 0, damage: z.burst, effect: d.effect, stun: d.stun, blockstun: 16, guardDamage: 30, hitstop: z.kind === "storm" ? 10 : 5, strength: z.kind === "gas" ? 2 : 3, meter: 6, status: z.status ?? undefined };
+        applyHit(m, att, def, hb, away, true);
+      }
+      continue;
+    }
+    z.life--;
+    if (z.every > 0 && z.life > 0 && z.life % z.every === 0 && inZone(z, def) && def.hp > 0) {
+      // A lingering area ignores a guard. You cannot block the ground you are standing on.
+      dealDamage(m, att, def, z.tick * (def.status.hex > 0 ? C.HEX_DMG : 1));
+      if (z.status) applyStatus(m, def, z.status);
+      if (def.hp <= 0 && m.phase === "fight") return defeat(m, def, away);
+    }
+  }
+  if (m.phase !== "fight") return;
+  const spent = m.zones.filter((z) => z.fuse <= 0 && z.life <= 0);
+  if (spent.length === 0) return;
+  for (const z of spent) m.events.push({ type: "zoneEnd", id: z.id });
+  m.zones = m.zones.filter((z) => z.fuse > 0 || z.life > 0);
+}
+
 // ---------------------------------------------------------------- the cylinder
 
 function startReload(m: Match, f: Fighter): void {
@@ -324,6 +415,8 @@ function defeat(m: Match, loser: Fighter, dir: V3): void {
   m.projectiles = [];
   m.standoff = null;
   m.cine = null;
+  clearZones(m);
+  for (const f of m.fighters) for (const k of STATUSES) f.status[k] = 0;
   endCombo(m, winner);
   setState(loser, "downed");
   loser.vel = v3(dir.x * 5, loser.grounded ? 0 : loser.vel.y, dir.z * 5);
@@ -449,7 +542,7 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
   }
 
   const scaling = Math.max(C.SCALE_MIN, 1 - C.SCALE_STEP * att.combo.hits);
-  const dmg = hb.damage * mult * scaling * (att.awakened > 0 ? C.AWAKEN_DMG : 1);
+  const dmg = hb.damage * mult * scaling * (att.awakened > 0 ? C.AWAKEN_DMG : 1) * (def.status.hex > 0 ? C.HEX_DMG : 1);
   const dealt = dealDamage(m, att, def, dmg);
   att.combo.hits++;
   def.hitsTaken++;
@@ -514,6 +607,7 @@ function applyHit(m: Match, att: Fighter, def: Fighter, hb: HitBox, dir: V3, pro
 
   m.hitstop = Math.max(m.hitstop, hb.hitstop);
   m.events.push({ type: "hit", att: att.id, def: def.id, pos, strength: hb.strength, effect, damage: dealt, blocked: false, perfect: false, projectile });
+  if (hb.status) applyStatus(m, def, hb.status);
   return true;
 }
 
@@ -527,9 +621,9 @@ function resolveStrikes(m: Match): void {
       let hb = mv.hits[h];
       if (f.hitDone[h] || f.mf < hb.from || f.mf > hb.to) continue;
       const d = distH(f.pos, o.pos);
-      if (d > hb.range || Math.abs(o.pos.y - f.pos.y) > 1.8) continue;
+      if (d > hb.range || Math.abs(o.pos.y - f.pos.y) > (hb.aoe ? 2.6 : 1.8)) continue;
       const dir = toTarget(f, o);
-      if (d > 0.8 && Math.abs(angleDiff(yawOf(dir), f.yaw)) > 1.75) continue;
+      if (!hb.aoe && d > 0.8 && Math.abs(angleDiff(yawOf(dir), f.yaw)) > 1.75) continue;
       // An ender only sends them flying if a round, or the brace, went off behind it.
       let mult = 1;
       if (mv.round || mv.nerve) {
@@ -555,21 +649,36 @@ function spawnProjectile(
   life: number,
   radius: number,
   damage = 0,
+  extra: { status?: StatusId; homing?: number } = {},
 ): V3 {
   const from = centerOf(f);
   const aim = norm(sub(centerOf(o), from), dirOfYaw(f.yaw));
   const pos = add(from, scale(aim, 0.8));
-  m.projectiles.push({ id: m.nextProjId++, kind, owner: f.id, pos, prev: clone(pos), vel: scale(aim, speed), life, radius, damage });
+  m.projectiles.push({ id: m.nextProjId++, kind, owner: f.id, pos, prev: clone(pos), vel: scale(aim, speed), life, radius, damage, status: extra.status, homing: extra.homing ?? 0 });
   return pos;
 }
 
-function fireBullet(m: Match, f: Fighter, o: Fighter, kind: ShotKind): void {
-  const mult = spendRound(m, f) * (kind === "fan" ? C.FAN_DMG : 1);
+function fireBullet(m: Match, f: Fighter, o: Fighter, fan: boolean): void {
+  // The engineer's rivets hit softer than a bullet, and every one is poisoned.
+  const rivet = kitOf(f).gun === "rivet";
+  const mult = spendRound(m, f) * (fan ? C.FAN_DMG : 1);
   f.shotCd = C.SHOT_CD;
   f.shotPose = 14;
-  const pos = spawnProjectile(m, f, o, "bullet", C.BULLET_SPEED, C.BULLET_LIFE, 0.3, C.BULLET_DMG * mult);
+  const dmg = (rivet ? C.RIVET_DMG : C.BULLET_DMG) * mult;
+  const pos = spawnProjectile(m, f, o, "bullet", C.BULLET_SPEED, C.BULLET_LIFE, 0.3, dmg, { status: rivet ? "poison" : undefined });
   f.meter = Math.min(C.METER, f.meter + 1);
+  const kind: ShotKind = fan ? "fan" : rivet ? "rivet" : "bullet";
   m.events.push({ type: "shot", owner: f.id, pos, kind });
+}
+
+/** The witch's shot: a slow bolt that bends toward its target. No ammunition, a short wait between casts. */
+function fireBolt(m: Match, f: Fighter, o: Fighter): void {
+  if (m.projectiles.filter((p) => p.kind === "bolt" && p.owner === f.id).length >= 3) return;
+  f.shotCd = C.BOLT_CD;
+  f.shotPose = 16;
+  const pos = spawnProjectile(m, f, o, "bolt", C.BOLT_SPEED, C.BOLT_LIFE, 0.5, BOLT_HIT.damage, { homing: C.BOLT_TURN });
+  f.meter = Math.min(C.METER, f.meter + 1);
+  m.events.push({ type: "shot", owner: f.id, pos, kind: "bolt" });
 }
 
 function doJump(m: Match, f: Fighter, o: Fighter, forced = false): void {
@@ -646,9 +755,14 @@ function trySlip(m: Match, f: Fighter, o: Fighter): boolean {
     f.invuln = 14;
     f.yaw = yawOf(toTarget(f, o));
     if (dist(f.pos, o.pos) < 4.5 && canBeHit(o)) {
-      const dir = toTarget(f, o);
-      setState(o, "parried", C.CATCH_STUN);
-      o.vel = v3(dir.x * 6, 0, dir.z * 6);
+      if (kitOf(f).catchShock && o.status.shock === 0) {
+        // The engineer's plating bites back.
+        applyStatus(m, o, "shock");
+      } else {
+        const dir = toTarget(f, o);
+        setState(o, "parried", C.CATCH_STUN);
+        o.vel = v3(dir.x * 6, 0, dir.z * 6);
+      }
     }
     m.hitstop = Math.max(m.hitstop, 10);
     m.events.push({ type: "armCatch", id: f.id, pos: centerOf(f) });
@@ -679,6 +793,17 @@ function rope(m: Match, att: Fighter, def: Fighter): void {
   att.combo.hits++;
   def.hitsTaken++;
   att.moveHit = true;
+  if (kitOf(att).special === "knot") {
+    setState(def, "stagger", C.KNOT_STUN);
+    def.airHang = true;
+    def.grounded = false;
+    def.pos.y = Math.max(def.pos.y, 0.05);
+    def.vel = v3(0, 9, 0);
+    m.hitstop = Math.max(m.hitstop, 5);
+    m.events.push({ type: "lasso", owner: att.id, hit: true });
+    applyStatus(m, def, "hex");
+    return;
+  }
   if (att.zipFlag) {
     setState(att, "zip", 12);
     att.anchor = v3(def.pos.x - dir.x * 1.6, def.pos.y, def.pos.z - dir.z * 1.6);
@@ -740,9 +865,11 @@ function stepCine(m: Match): void {
     m.cine = null;
     toFree(att);
     // The Last Word is six shots: it leaves the cylinder empty.
-    att.ammo = 0;
-    att.reload = 0;
-    startReload(m, att);
+    if (kitOf(att).gun !== "none") {
+      att.ammo = 0;
+      att.reload = 0;
+      startReload(m, att);
+    }
     const dir = toTarget(att, def);
     m.events.push({ type: "cineEnd", att: att.id, def: def.id });
     if (def.hp <= 0) defeat(m, def, dir);
@@ -827,7 +954,7 @@ function stepStandoff(m: Match, inputs: [InputFrame, InputFrame]): void {
   toFree(w);
   w.shotPose = 22;
   w.meter = Math.min(C.METER, w.meter + C.STANDOFF_NERVE);
-  if (w.ammo > 0 && w.reload === 0) spendRound(m, w);
+  if (w.ammo > 0 && w.reload === 0 && kitOf(w).gun !== "none") spendRound(m, w);
   m.events.push({ type: "shot", owner: w.id, pos: add(centerOf(w), scale(dir, 0.8)), kind: "quick" });
   // The shot that opens a duel wounds; it never ends it.
   const dealt = dealDamage(m, w, l, C.STANDOFF_DMG, !s.opening);
@@ -843,17 +970,32 @@ function stepStandoff(m: Match, inputs: [InputFrame, InputFrame]): void {
 // ---------------------------------------------------------------- per-state logic
 
 function handleShot(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
-  if (f.buf.shot > 0 && f.reload === 0 && f.ammo > 0 && f.shotCd <= 0) {
+  const k = kitOf(f);
+  if (k.gun === "none") {
+    if (f.buf.shot > 0 && f.shotCd <= 0) {
+      f.buf.shot = 0;
+      fireBolt(m, f, o);
+    }
+  } else if (f.buf.shot > 0 && f.reload === 0 && f.ammo > 0 && f.shotCd <= 0) {
     f.buf.shot = 0;
-    fireBullet(m, f, o, "bullet");
+    fireBullet(m, f, o, false);
   }
   if (!inp.shot) {
     f.shotHold = 0;
     return;
   }
-  // Keep the trigger held and the other hand comes across to fan the hammer.
   f.shotHold++;
-  if (f.shotHold >= C.FAN_HOLD && f.ammo >= 2 && f.reload === 0) startMove(f, o, "fan");
+  if (f.shotHold < C.FAN_HOLD) return;
+  if (k.hold === "circle") {
+    // The witch holds the cast and draws a circle under her target.
+    if (f.meter >= C.CIRCLE_COST) {
+      f.meter -= C.CIRCLE_COST;
+      startMove(f, o, "circle");
+    }
+  } else if (f.ammo >= 2 && f.reload === 0) {
+    // Keep the trigger held and the other hand comes across to fan the hammer.
+    startMove(f, o, "fan");
+  }
 }
 
 function freeLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
@@ -870,7 +1012,7 @@ function freeLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
   if (f.meter >= C.LARIAT_COST && consume(f, "special")) {
     f.meter -= C.LARIAT_COST;
     f.zipFlag = inp.tilt < -0.5;
-    startMove(f, o, "lariat");
+    startMove(f, o, kitOf(f).special === "canister" ? "canister" : "lariat");
     return;
   }
   if (inp.guard) {
@@ -899,7 +1041,7 @@ function freeLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
     my /= l;
   }
   const k = kitOf(f);
-  const speed = f.grounded ? k.run : k.airRun;
+  const speed = (f.grounded ? k.run : k.airRun) * (f.status.shock > 0 ? C.SHOCK_SLOW : 1);
   const right = rightOf(fwd);
   f.vel.x = (fwd.x * my + right.x * mx) * speed;
   f.vel.z = (fwd.z * my + right.z * mx) * speed;
@@ -912,11 +1054,12 @@ function steadyLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
   if (f.t >= C.STEADY_STARTUP) {
     f.meter = Math.min(C.METER, f.meter + C.NERVE_RATE * (f.awakened > 0 ? 1.5 : 1));
   }
-  if (f.reload === 0 && f.ammo < C.AMMO && f.t % C.STEADY_CHAMBER === 0) {
+  const hasGun = kitOf(f).gun !== "none";
+  if (hasGun && f.reload === 0 && f.ammo < C.AMMO && f.t % C.STEADY_CHAMBER === 0) {
     f.ammo++;
     m.events.push({ type: "chamber", id: f.id });
   }
-  if (f.buf.shot > 0 && f.reload === 0 && f.ammo > 0) {
+  if (f.buf.shot > 0 && (!hasGun || (f.reload === 0 && f.ammo > 0))) {
     if (f.t >= C.QUICK_MIN) {
       f.buf.shot = 0;
       f.quickPower = clamp((f.t - C.QUICK_MIN) / (C.QUICK_FULL - C.QUICK_MIN), 0, 1);
@@ -947,7 +1090,7 @@ function fanLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
     if (f.mf >= f.dur) toFree(f);
     return;
   }
-  if (f.mf >= 3 && (f.mf - 3) % C.FAN_GAP === 0 && f.ammo > 0 && f.reload === 0) fireBullet(m, f, o, "fan");
+  if (f.mf >= 3 && (f.mf - 3) % C.FAN_GAP === 0 && f.ammo > 0 && f.reload === 0) fireBullet(m, f, o, true);
   if (f.ammo === 0 || f.reload > 0 || (!inp.shot && f.mf >= 8)) f.dur = f.mf + C.FAN_RECOVER;
 }
 
@@ -1004,12 +1147,22 @@ function attackLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
 
   if (mv.fireAt === f.mf) {
     if (f.move === "quickdraw") {
-      const mult = spendRound(m, f);
-      const dmg = (C.QUICK_DMG_MIN + (C.QUICK_DMG_MAX - C.QUICK_DMG_MIN) * f.quickPower) * mult;
-      const pos = spawnProjectile(m, f, o, "quick", C.QUICK_SPEED, C.QUICK_LIFE, 0.5, dmg);
+      const quick = kitOf(f).quick;
       f.shotPose = 20;
-      m.events.push({ type: "shot", owner: f.id, pos, kind: "quick" });
-    } else if (f.move === "lariat") spawnProjectile(m, f, o, "lasso", C.LASSO_SPEED, C.LASSO_LIFE, 0.5);
+      if (quick === "storm") {
+        // The witch's answer to the quickdraw: the sky comes down on wherever they are standing.
+        spawnZone(m, f, "storm", o.pos, 0.7 + 0.6 * f.quickPower);
+      } else {
+        const mult = spendRound(m, f);
+        const tesla = quick === "tesla";
+        const lo = tesla ? C.TESLA_DMG_MIN : C.QUICK_DMG_MIN;
+        const hi = tesla ? C.TESLA_DMG_MAX : C.QUICK_DMG_MAX;
+        const pos = spawnProjectile(m, f, o, "quick", C.QUICK_SPEED, C.QUICK_LIFE, 0.5, (lo + (hi - lo) * f.quickPower) * mult, { status: tesla ? "shock" : undefined });
+        m.events.push({ type: "shot", owner: f.id, pos, kind: tesla ? "tesla" : "quick" });
+      }
+    } else if (f.move === "circle") spawnZone(m, f, "hex", o.pos);
+    else if (f.move === "canister") spawnZone(m, f, "gas", o.pos);
+    else if (f.move === "lariat") spawnProjectile(m, f, o, "lasso", C.LASSO_SPEED, C.LASSO_LIFE, 0.5);
     else if (f.move === "lastWord") spawnProjectile(m, f, o, "ult", C.ULT_SPEED, C.ULT_LIFE, 0.9);
   }
 
@@ -1034,7 +1187,7 @@ function attackLogic(m: Match, f: Fighter, o: Fighter, inp: InputFrame): void {
       if (f.move !== "lariat" && f.meter >= C.LARIAT_COST && consume(f, "special")) {
         f.meter -= C.LARIAT_COST;
         f.zipFlag = inp.tilt < -0.5;
-        return startMove(f, o, "lariat");
+        return startMove(f, o, kitOf(f).special === "canister" ? "canister" : "lariat");
       }
       if (f.buf.dash > 0) {
         const move = f.move;
@@ -1305,7 +1458,7 @@ function physics(m: Match, f: Fighter): void {
   const gs = gravityScale(f);
   if (!f.grounded) {
     if (gs === 0) f.vel.y = 0;
-    else f.vel.y -= C.GRAVITY * gs * dt;
+    else f.vel.y -= C.GRAVITY * gs * dt * (f.vel.y < 0 && f.state === "free" ? kitOf(f).fall : 1);
   }
   f.pos.x += f.vel.x * dt;
   f.pos.y += f.vel.y * dt;
@@ -1329,16 +1482,26 @@ function physics(m: Match, f: Fighter): void {
 function updateProjectiles(m: Match): void {
   const keep: Projectile[] = [];
   for (const p of m.projectiles) {
+    const att = m.fighters[p.owner];
+    const def = m.fighters[1 - p.owner];
+    if (p.homing > 0) {
+      // Bend toward the target, a little each tick.
+      const sp = len(p.vel);
+      const cur = scale(p.vel, 1 / sp);
+      const want = norm(sub(centerOf(def), p.pos), cur);
+      const angle = Math.acos(clamp(cur.x * want.x + cur.y * want.y + cur.z * want.z, -1, 1));
+      const t = angle < 1e-4 ? 1 : Math.min(1, p.homing / angle);
+      p.vel = scale(norm(add(scale(cur, 1 - t), scale(want, t)), cur), sp);
+    }
     assign(p.prev, p.pos);
     p.pos = add(p.pos, scale(p.vel, C.DT));
     p.life--;
-    const att = m.fighters[p.owner];
-    const def = m.fighters[1 - p.owner];
     let alive = p.life > 0 && lenH(p.pos) < C.ARENA_R + 20 && p.pos.y > -0.5;
 
     if (alive && canBeHit(def) && segPointDist(p.prev, p.pos, centerOf(def)) <= p.radius + 0.7) {
       const dir = normH(p.vel, dirOfYaw(att.yaw));
-      if (p.kind === "bullet" || p.kind === "quick") {
+      if (p.kind === "bullet" || p.kind === "quick" || p.kind === "bolt") {
+        const hb: HitBox = p.kind === "bolt" ? { ...BOLT_HIT, damage: p.damage } : { ...PROJ_HITS[p.kind], damage: p.damage, status: p.status };
         if (kitOf(def).deflect && def.state === "guard" && def.guardT <= C.PERFECT_WINDOW) {
           // Caught on the brace at the perfect moment: the shot goes back where it came from.
           const speed = len(p.vel);
@@ -1349,7 +1512,7 @@ function updateProjectiles(m: Match): void {
           def.meter = Math.min(C.METER, def.meter + 8);
           m.hitstop = Math.max(m.hitstop, 6);
           m.events.push({ type: "deflect", id: def.id, pos: clone(p.pos), back: true });
-        } else if (applyHit(m, att, def, { ...PROJ_HITS[p.kind], damage: p.damage }, dir, true)) alive = false;
+        } else if (applyHit(m, att, def, hb, dir, true)) alive = false;
       } else if (p.kind === "lasso") {
         rope(m, att, def);
         alive = false;
@@ -1375,12 +1538,13 @@ function updateProjectiles(m: Match): void {
         if (prop.broken || p.pos.y > prop.height) continue;
         if (segPointDist(p.prev, p.pos, v3(prop.pos.x, p.pos.y, prop.pos.z)) > prop.radius + p.radius) continue;
         // A bullet stops in what it hits. A quickdraw or the Last Word goes straight through.
-        prop.hp -= p.kind === "bullet" ? 1 : 10;
+        const small = p.kind === "bullet" || p.kind === "bolt";
+        prop.hp -= small ? 1 : 10;
         if (prop.hp <= 0) {
           prop.broken = true;
           m.events.push({ type: "propBreak", index: i, pos: clone(prop.pos), dir: norm(p.vel, v3(0, 0, 1)) });
         }
-        if (p.kind === "bullet") alive = false;
+        if (small) alive = false;
         break;
       }
     }
@@ -1460,8 +1624,15 @@ function upkeep(m: Match): void {
         f.pipTimer = 0;
       }
     }
-    // Dashes come back one at a time. Running dry is a real cost.
-    if (f.dashes < k.dashes) {
+    if (m.phase === "fight") {
+      for (const st of STATUSES) if (f.status[st] > 0) f.status[st]--;
+      if (f.status.poison > 0 && f.status.poison % C.POISON_EVERY === 0 && f.hp > 0) {
+        dealDamage(m, o, f, C.POISON_DMG);
+        if (f.hp <= 0) defeat(m, f, toTarget(o, f));
+      }
+    }
+    // Dashes come back one at a time. Running dry is a real cost, and shock stops the clock.
+    if (f.dashes < k.dashes && f.status.shock === 0) {
       f.dashTimer += f.awakened > 0 ? 2 : 1;
       if (f.dashTimer >= k.dashRegen) {
         f.dashes++;
@@ -1586,6 +1757,7 @@ export function stepMatch(m: Match, inputs: [InputFrame, InputFrame]): SimEvent[
 
   if (m.phase === "fight") {
     updateProjectiles(m);
+    if (m.phase === "fight" && !m.cine) updateZones(m);
     if (m.phase === "fight" && !m.cine) resolveStrikes(m);
   }
   collideWorld(m);

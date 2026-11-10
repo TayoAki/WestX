@@ -13,7 +13,7 @@ import { CreateTorus } from "@babylonjs/core/Meshes/Builders/torusBuilder";
 import { Mesh } from "@babylonjs/core/Meshes/mesh";
 import { ParticleSystem } from "@babylonjs/core/Particles/particleSystem";
 import type { Scene } from "@babylonjs/core/scene";
-import type { Match, PropKind, SimEvent } from "../sim/types";
+import { STATUSES, type Match, type PropKind, type SimEvent, type StatusId, type ZoneKind } from "../sim/types";
 import type { V3 } from "../sim/vec";
 import type { Rig } from "./rig";
 import { makeGlow, type Stage } from "./stage";
@@ -27,6 +27,31 @@ const WHITE = Color3.White();
 const FULGUR = Color3.FromHexString("#5ef2ff");
 const SAND = new Color3(0.86, 0.66, 0.46);
 const ADD = 1;
+/** Colours for conditions and for the areas that cause them. */
+const STATUS_COLOR: Record<StatusId, Color3> = {
+  poison: Color3.FromHexString("#9be34a"),
+  shock: Color3.FromHexString("#bff6ff"),
+  hex: Color3.FromHexString("#c77dff"),
+};
+const ZONE_COLOR: Record<ZoneKind, Color3> = {
+  hex: STATUS_COLOR.hex,
+  storm: Color3.FromHexString("#e9d6ff"),
+  gas: STATUS_COLOR.poison,
+};
+
+/** A marked area on the ground: a rim that shows its reach and a disc that fills as the fuse burns. */
+interface ZoneView {
+  id: number;
+  kind: ZoneKind;
+  rim: Mesh;
+  disc: Mesh;
+  discMat: StandardMaterial;
+  radius: number;
+  fuse: number;
+  t: number;
+  erupted: boolean;
+  puff: number;
+}
 
 const vec = (v: V3): Vector3 => new Vector3(v.x, v.y, v.z);
 
@@ -129,6 +154,10 @@ export class Fx {
   private ropes: Mesh[] = [];
   private ghostTimer = [0, 0];
   private steadyTimer = [0, 0];
+  private statusTimer = [0, 0];
+  private zoneViews: ZoneView[] = [];
+  private bolts: Mesh[] = [];
+  private boltMats: StandardMaterial[] = [];
   private tmp = new Vector3();
   private tmp2 = new Vector3();
 
@@ -137,6 +166,33 @@ export class Fx {
     stage: Stage,
     private rigs: [Rig, Rig],
   ) {
+    // Areas: a pool of rims and discs, recoloured per use.
+    for (let i = 0; i < 8; i++) {
+      const rim = CreateTorus(`zoneRim${i}`, { diameter: 2, thickness: 0.05, tessellation: 48 }, scene);
+      rim.material = makeGlow(scene, `zoneRimMat${i}`, "#ffffff", 0.9);
+      const disc = CreateDisc(`zoneDisc${i}`, { radius: 1, tessellation: 40 }, scene);
+      disc.rotation.x = Math.PI / 2;
+      const discMat = makeGlow(scene, `zoneDiscMat${i}`, "#ffffff", 0.1);
+      discMat.alphaMode = ADD;
+      disc.material = discMat;
+      for (const mesh of [rim, disc]) {
+        mesh.isPickable = false;
+        mesh.setEnabled(false);
+      }
+      this.zoneViews.push({ id: -1, kind: "hex", rim, disc, discMat, radius: 1, fuse: 1, t: 0, erupted: false, puff: 0 });
+    }
+    for (let i = 0; i < 6; i++) {
+      const bolt = CreateCapsule(`bolt${i}`, { height: 1.1, radius: 0.28, tessellation: 8, capSubdivisions: 3 }, scene);
+      bolt.rotation.x = Math.PI / 2;
+      bolt.bakeCurrentTransformIntoVertices();
+      const mat = makeGlow(scene, `boltMat${i}`, "#c77dff");
+      bolt.material = mat;
+      bolt.isPickable = false;
+      bolt.setEnabled(false);
+      this.bolts.push(bolt);
+      this.boltMats.push(mat);
+    }
+
     const dot = texture(scene, "dot", (g, s) => {
       const grad = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
       grad.addColorStop(0, "rgba(255,255,255,1)");
@@ -414,8 +470,23 @@ export class Fx {
     else if (kind === "side") p.mesh.rotation.z = (Math.random() - 0.5) * 0.7;
   }
 
+  /** Points the effects at a new pair of fighters, when the classes change between matches. */
+  setRigs(rigs: [Rig, Rig]): void {
+    this.rigs = rigs;
+    for (let i = 0; i < 2; i++) {
+      const c = rigs[i].auraColor;
+      this.auras[i].color1 = new Color4(c.r, c.g, c.b, 0.9);
+      this.auras[i].colorDead = new Color4(c.r, c.g * 0.5, c.b * 0.5, 0);
+    }
+  }
+
   /** Clears persistent marks between matches. */
   reset(): void {
+    for (const z of this.zoneViews) {
+      z.id = -1;
+      z.rim.setEnabled(false);
+      z.disc.setEnabled(false);
+    }
     for (const c of this.craters) c.setEnabled(false);
     for (const c of this.chunks) {
       c.life = 0;
@@ -649,6 +720,76 @@ export class Fx {
         this.shake = Math.min(1.3, this.shake + (e.final ? 1.2 : 0.35));
         break;
       }
+      case "zoneSpawn": {
+        const z = this.zoneViews.find((v) => v.id === -1) ?? this.zoneViews[0];
+        const color = ZONE_COLOR[e.kind];
+        z.id = e.id;
+        z.kind = e.kind;
+        z.radius = e.radius;
+        z.fuse = Math.max(1, e.fuse) / 60;
+        z.t = 0;
+        z.erupted = false;
+        z.rim.position.set(e.pos.x, 0.07, e.pos.z);
+        z.rim.scaling.setAll(e.radius);
+        (z.rim.material as StandardMaterial).emissiveColor.copyFrom(color);
+        z.disc.position.set(e.pos.x, 0.05, e.pos.z);
+        z.disc.scaling.setAll(0.01);
+        z.discMat.emissiveColor.copyFrom(color);
+        z.discMat.alpha = 0.3;
+        z.rim.setEnabled(true);
+        z.disc.setEnabled(true);
+        break;
+      }
+      case "zoneErupt": {
+        const z = this.zoneViews.find((v) => v.id === e.id);
+        if (z) {
+          z.erupted = true;
+          z.disc.scaling.setAll(z.radius);
+        }
+        const color = ZONE_COLOR[e.kind];
+        const pos = vec(e.pos).addInPlaceFromFloats(0, 0.6, 0);
+        const big = e.kind === "storm";
+        this.star(pos, WHITE, big ? 9 : 4.5, big ? 0.22 : 0.14);
+        this.shock(pos, color, 1, e.radius * 2.2, 0.3);
+        this.groundRing(vec(e.pos), color, e.radius * 0.6, e.radius * 2.4, 0.35, 0.8);
+        // A ring of bursts around the rim, so the whole area reads as struck.
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          this.tmp.set(e.pos.x + Math.cos(a) * e.radius * 0.6, 0.7, e.pos.z + Math.sin(a) * e.radius * 0.6);
+          this.spark(this.tmp, big ? 12 : 7, color, big ? 22 : 12, 0.3, big ? 0.4 : 0.5);
+        }
+        if (e.kind !== "gas") this.dust(vec(e.pos), big ? 18 : 8, 2.4, 8);
+        this.shake = Math.min(1.3, this.shake + (big ? 0.8 : 0.3));
+        break;
+      }
+      case "zoneEnd": {
+        const z = this.zoneViews.find((v) => v.id === e.id);
+        if (z) {
+          z.id = -1;
+          z.rim.setEnabled(false);
+          z.disc.setEnabled(false);
+        }
+        break;
+      }
+      case "status": {
+        const pos = vec(e.pos);
+        const color = STATUS_COLOR[e.kind];
+        this.star(pos, color, 2.2, 0.14);
+        this.spark(pos, 14, color, e.kind === "shock" ? 16 : 6, 0.26, e.kind === "shock" ? 0.25 : 0.6);
+        if (e.kind === "shock") this.shake = Math.min(1.3, this.shake + 0.2);
+        break;
+      }
+      case "overload": {
+        // Two conditions burning off at once: the biggest flash that is not an ultimate.
+        const pos = vec(e.pos);
+        this.star(pos, WHITE, 8, 0.22);
+        this.shock(pos, STATUS_COLOR.poison, 1, 11, 0.4);
+        this.shock(pos, STATUS_COLOR.shock, 0.6, 7, 0.3);
+        this.shock(pos, STATUS_COLOR.hex, 0.4, 14, 0.5);
+        this.spark(pos, 60, WHITE, 26, 0.36, 0.5);
+        this.shake = Math.min(1.3, this.shake + 1.0);
+        break;
+      }
       case "ko": {
         const pos = vec(e.pos).addInPlaceFromFloats(0, 0.95, 0);
         if (e.alive) {
@@ -736,12 +877,48 @@ export class Fx {
       } else this.ghostTimer[i] = 0;
     }
 
+    for (let i = 0; i < 2; i++) {
+      const f = m.fighters[i];
+      this.statusTimer[i] -= dt;
+      if (this.statusTimer[i] > 0 || f.state === "slip") continue;
+      this.statusTimer[i] = 0.22;
+      this.rigs[i].center(this.tmp);
+      for (const k of STATUSES) {
+        if (f.status[k] <= 0) continue;
+        // Poison drifts, hex hangs, shock snaps.
+        this.spark(this.tmp, k === "shock" ? 5 : 3, STATUS_COLOR[k], k === "shock" ? 14 : 4, 0.2, k === "shock" ? 0.15 : 0.6);
+      }
+    }
+
+    for (const z of this.zoneViews) {
+      if (z.id === -1) continue;
+      z.t += dt;
+      if (!z.erupted) {
+        // The disc grows to fill the rim. When it gets there, the area goes off.
+        const k = Math.min(1, z.t / z.fuse);
+        z.disc.scaling.setAll(Math.max(0.01, z.radius * k));
+        z.discMat.alpha = 0.18 + 0.2 * k;
+        z.rim.scaling.setAll(z.radius * (1 + Math.sin(z.t * 24) * 0.015));
+      } else {
+        z.discMat.alpha = 0.16 + Math.sin(z.t * 9) * 0.04;
+        z.puff -= dt;
+        if (z.puff <= 0) {
+          z.puff = 0.12;
+          const a = Math.random() * Math.PI * 2;
+          const r = Math.sqrt(Math.random()) * z.radius;
+          this.tmp.set(z.disc.position.x + Math.cos(a) * r, 0.5, z.disc.position.z + Math.sin(a) * r);
+          this.spark(this.tmp, 3, ZONE_COLOR[z.kind], 3, 0.3, 0.7);
+        }
+      }
+    }
+
     this.syncProjectiles(m, alpha);
     this.syncRopes(m);
   }
 
   private syncProjectiles(m: Match, alpha: number): void {
     let b = 0;
+    let bo = 0;
     const usedQ = [false, false];
     const usedU = [false, false];
     const usedL = [false, false];
@@ -751,7 +928,11 @@ export class Fx {
       const z = p.prev.z + (p.pos.z - p.prev.z) * alpha;
       let mesh: Mesh | undefined;
       if (p.kind === "bullet") mesh = this.bullets[b++];
-      else if (p.kind === "quick") {
+      else if (p.kind === "bolt") {
+        mesh = this.bolts[bo];
+        if (mesh) this.boltMats[bo].emissiveColor.copyFrom(this.rigs[p.owner].auraColor);
+        bo++;
+      } else if (p.kind === "quick") {
         mesh = this.quicks[p.owner];
         usedQ[p.owner] = true;
       } else if (p.kind === "ult") {
@@ -768,6 +949,7 @@ export class Fx {
       mesh.setEnabled(true);
     }
     for (let i = b; i < this.bullets.length; i++) this.bullets[i].setEnabled(false);
+    for (let i = bo; i < this.bolts.length; i++) this.bolts[i].setEnabled(false);
     for (let i = 0; i < 2; i++) {
       if (!usedQ[i]) this.quicks[i].setEnabled(false);
       if (!usedU[i]) this.ults[i].setEnabled(false);

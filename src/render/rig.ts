@@ -31,10 +31,13 @@ export interface Palette {
   aura: string;
 }
 
-export const PALETTES: [Palette, Palette] = [
-  { poncho: "#1f8f8a", shirt: "#ecdcb8", legs: "#4a3a56", boots: "#2a1f2a", skin: "#c98a5e", hat: "#f1e3c4", band: "#ffd24a", aura: "#ffd24a" },
-  { poncho: "#b8323f", shirt: "#33293a", legs: "#3d2c36", boots: "#1c1418", skin: "#e2ae82", hat: "#2a2030", band: "#ff4a6e", aura: "#ff4a6e" },
-];
+/** One look per class, so you can tell who you are fighting from across the arena. */
+export const KIT_PALETTE: Record<KitId, Palette> = {
+  hunter: { poncho: "#1f8f8a", shirt: "#ecdcb8", legs: "#4a3a56", boots: "#2a1f2a", skin: "#c98a5e", hat: "#f1e3c4", band: "#ffd24a", aura: "#ffd24a" },
+  witch: { poncho: "#5a3b8c", shirt: "#3b2a55", legs: "#2c2140", boots: "#1a1326", skin: "#d9a57c", hat: "#2a2040", band: "#c77dff", aura: "#c77dff" },
+  engineer: { poncho: "#8a5a34", shirt: "#d8c9a0", legs: "#5b4a3a", boots: "#2b211b", skin: "#b9805a", hat: "#6b4a2e", band: "#b5e853", aura: "#b5e853" },
+  outlaw: { poncho: "#b8323f", shirt: "#33293a", legs: "#3d2c36", boots: "#1c1418", skin: "#e2ae82", hat: "#2a2030", band: "#ff4a6e", aura: "#ff4a6e" },
+};
 
 const OUTLINE = Color3.FromHexString("#1a1320");
 
@@ -111,15 +114,52 @@ export class Rig {
     const spine = node("spine", body, 0, 0.06, 0);
     this.nodes.spine = spine;
     part(CreateBox(`f${id}-torso`, { width: 0.42, height: 0.52, depth: 0.26 }, scene), spine, shirt, 0, 0.3, 0);
-    part(CreateCylinder(`f${id}-poncho`, { height: 0.5, diameterTop: 0.3, diameterBottom: 1.04, tessellation: 9 }, scene), spine, poncho, 0, 0.33, 0, 0.03);
+    const witch = kit === "witch";
+    const engineer = kit === "engineer";
+    if (witch) {
+      // A shawl and a long robe: the one silhouette in the Territory with no legs showing.
+      part(CreateCylinder(`f${id}-shawl`, { height: 0.34, diameterTop: 0.3, diameterBottom: 0.86, tessellation: 9 }, scene), spine, poncho, 0, 0.42, 0, 0.03);
+      part(CreateCylinder(`f${id}-robe`, { height: 0.98, diameterTop: 0.44, diameterBottom: 1.12, tessellation: 10 }, scene), body, poncho, 0, -0.44, 0, 0.03);
+    } else if (engineer) {
+      // A leather apron, and a pressure tank on the back with a gauge that glows.
+      part(CreateBox(`f${id}-apron`, { width: 0.46, height: 0.62, depth: 0.06 }, scene), spine, poncho, 0, 0.2, 0.15, 0.02);
+      part(CreateCylinder(`f${id}-tank`, { height: 0.56, diameter: 0.28, tessellation: 10 }, scene), spine, steel, 0, 0.3, -0.24, 0.025);
+      const gauge = CreateBox(`f${id}-gauge`, { width: 0.1, height: 0.3, depth: 0.04 }, scene);
+      gauge.material = makeGlow(scene, `f${id}-gaugeMat`, palette.aura);
+      gauge.parent = spine;
+      gauge.position.set(0, 0.3, -0.39);
+      gauge.isPickable = false;
+    } else {
+      part(CreateCylinder(`f${id}-poncho`, { height: 0.5, diameterTop: 0.3, diameterBottom: 1.04, tessellation: 9 }, scene), spine, poncho, 0, 0.33, 0, 0.03);
+    }
 
     const head = node("head", spine, 0, 0.6, 0);
     this.nodes.head = head;
     part(CreateSphere(`f${id}-skull`, { diameter: 0.32, segments: 10 }, scene), head, skin, 0, 0.14, 0);
     part(CreateBox(`f${id}-scarf`, { width: 0.3, height: 0.1, depth: 0.3 }, scene), head, band, 0, 0.0, 0, 0);
-    part(CreateCylinder(`f${id}-brim`, { height: 0.035, diameter: 0.78, tessellation: 14 }, scene), head, hat, 0, 0.26, 0, 0.03);
-    part(CreateCylinder(`f${id}-crown`, { height: 0.2, diameterTop: 0.3, diameterBottom: 0.36, tessellation: 12 }, scene), head, hat, 0, 0.37, 0);
-    part(CreateCylinder(`f${id}-hatband`, { height: 0.05, diameter: 0.375, tessellation: 12 }, scene), head, band, 0, 0.3, 0, 0);
+    if (witch) {
+      // A wide brim and a tall crooked point.
+      part(CreateCylinder(`f${id}-brim`, { height: 0.035, diameter: 1.0, tessellation: 14 }, scene), head, hat, 0, 0.26, 0, 0.03);
+      const point = part(CreateCylinder(`f${id}-crown`, { height: 0.62, diameterTop: 0.03, diameterBottom: 0.38, tessellation: 10 }, scene), head, hat, 0, 0.57, -0.04);
+      point.rotation.x = -0.22;
+      part(CreateCylinder(`f${id}-hatband`, { height: 0.06, diameter: 0.4, tessellation: 12 }, scene), head, band, 0, 0.31, 0, 0);
+    } else if (engineer) {
+      // A flat cap and a pair of goggles.
+      part(CreateCylinder(`f${id}-cap`, { height: 0.1, diameter: 0.38, tessellation: 12 }, scene), head, hat, 0, 0.3, 0);
+      part(CreateBox(`f${id}-peak`, { width: 0.3, height: 0.03, depth: 0.2 }, scene), head, hat, 0, 0.26, 0.2, 0.02);
+      for (const x of [-0.075, 0.075]) {
+        const lens = CreateCylinder(`f${id}-lens${x}`, { height: 0.05, diameter: 0.11, tessellation: 10 }, scene);
+        lens.material = makeGlow(scene, `f${id}-lensMat${x}`, palette.aura);
+        lens.parent = head;
+        lens.rotation.x = Math.PI / 2;
+        lens.position.set(x, 0.16, 0.16);
+        lens.isPickable = false;
+      }
+    } else {
+      part(CreateCylinder(`f${id}-brim`, { height: 0.035, diameter: 0.78, tessellation: 14 }, scene), head, hat, 0, 0.26, 0, 0.03);
+      part(CreateCylinder(`f${id}-crown`, { height: 0.2, diameterTop: 0.3, diameterBottom: 0.36, tessellation: 12 }, scene), head, hat, 0, 0.37, 0);
+      part(CreateCylinder(`f${id}-hatband`, { height: 0.05, diameter: 0.375, tessellation: 12 }, scene), head, band, 0, 0.3, 0, 0);
+    }
 
     let hand!: TransformNode;
     let fist!: TransformNode;
@@ -147,6 +187,22 @@ export class Rig {
         core.parent = elbow;
         core.position.set(0, -0.16, 0.135);
         core.isPickable = false;
+      } else if (witch) {
+        part(CreateSphere(`f${id}-hand${s}`, { diameter: 0.14, segments: 8 }, scene), elbow, skin, 0, -0.31, 0);
+        if (side > 0) {
+          // A staff with a hex-light at its head.
+          part(CreateCylinder(`f${id}-staff`, { height: 1.55, diameter: 0.045, tessellation: 6 }, scene), elbow, steel, 0, -0.1, 0.06, 0.015);
+          const orb = CreateSphere(`f${id}-orb`, { diameter: 0.19, segments: 8 }, scene);
+          orb.material = makeGlow(scene, `f${id}-orbMat`, palette.aura);
+          orb.parent = elbow;
+          orb.position.set(0, 0.72, 0.06);
+          orb.isPickable = false;
+        }
+      } else if (engineer && side > 0) {
+        // The steam gauntlet: the engineer's striking hand.
+        const copper = mat("copper", "#b66a3c");
+        part(CreateCylinder(`f${id}-gauntlet`, { height: 0.34, diameter: 0.25, tessellation: 8 }, scene), elbow, copper, 0, -0.17, 0, 0.026);
+        part(CreateSphere(`f${id}-knuckle`, { diameter: 0.2, segments: 8 }, scene), elbow, copper, 0, -0.38, 0, 0.022);
       } else {
         part(CreateSphere(`f${id}-hand${s}`, { diameter: 0.14, segments: 8 }, scene), elbow, skin, 0, -0.31, 0);
         // A revolver in the hand, pointing along the forearm.
@@ -265,6 +321,11 @@ export class Rig {
       this.aura.scaling.set(flick, 1 + Math.sin(clock.time * 23) * 0.1, flick);
       this.aura.rotation.y = clock.time * 5;
     }
+  }
+
+  /** Removes the fighter from the scene, for when the classes change between matches. */
+  dispose(): void {
+    this.root.dispose(false, true);
   }
 
   /** Centre of mass in world space, for effects. */

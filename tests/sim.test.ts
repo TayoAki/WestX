@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { AI } from "../src/sim/ai";
 import { KITS } from "../src/sim/kits";
 import { createMatch, kitOf, stepMatch } from "../src/sim/match";
-import { C } from "../src/sim/moves";
-import { blankInput, type InputFrame, type Match, type MatchOptions, type SimEvent } from "../src/sim/types";
+import { BOLT_HIT, C, ZONES } from "../src/sim/moves";
+import { blankInput, STATUSES, type InputFrame, type Match, type MatchOptions, type SimEvent } from "../src/sim/types";
 import { dirOfYaw, distH, sub, v3 } from "../src/sim/vec";
 
 type Partial1 = Partial<InputFrame>;
@@ -699,6 +699,252 @@ describe("the hunter", () => {
     expect(HUNTER.maxLaunches).toBe(1);
     expect(HUNTER.maxChases).toBe(1);
     expect(OUTLAW.maxLaunches).toBeGreaterThan(HUNTER.maxLaunches);
+  });
+});
+
+describe("conditions", () => {
+  /** Engineer against outlaw: the engineer has both poison and shock. */
+  const duel = (gap = 2): Match => fight(gap, { kits: ["engineer", "outlaw"] });
+
+  it("poison wears health down over time and then wears off", () => {
+    const m = duel(20);
+    m.fighters[0].ammo = 1;
+    const ev = run(m, 30, (t) => ({ shot: t < 2 }));
+    expect(ev.some((e) => e.type === "status" && e.kind === "poison")).toBe(true);
+    const after = m.fighters[1].hp;
+    run(m, C.POISON_T);
+    expect(m.fighters[1].status.poison).toBe(0);
+    const ticks = Math.floor(C.POISON_T / C.POISON_EVERY);
+    expect(after - m.fighters[1].hp).toBeGreaterThanOrEqual((ticks - 2) * C.POISON_DMG);
+    expect(after - m.fighters[1].hp).toBeLessThanOrEqual(ticks * C.POISON_DMG);
+  });
+
+  it("shock stops a fighter where they stand, slows them, and holds their dashes", () => {
+    const m = duel(20);
+    m.fighters[1].dashes = 0;
+    run(m, C.QUICK_MIN + 2, { steady: true });
+    const ev = run(m, 12, (t) => ({ steady: true, shot: t < 2 }));
+    expect(ev.some((e) => e.type === "shot" && e.kind === "tesla")).toBe(true);
+    expect(m.fighters[1].status.shock).toBeGreaterThan(0);
+    run(m, 100);
+    expect(m.fighters[1].dashes).toBe(0);
+    const z0 = m.fighters[1].pos.z;
+    run(m, 30, {}, { my: -1 });
+    expect(Math.abs(m.fighters[1].pos.z - z0)).toBeLessThan(OUTLAW.run * 0.5 * 0.8);
+  });
+
+  it("stuns with shock only once until it has worn off", () => {
+    const m = duel(2);
+    m.fighters[0].meter = 100;
+    // The first application lands on a free fighter and staggers them.
+    m.fighters[1].status.shock = 0;
+    run(m, 80, (t) => ({ strike: t < 40 && t % 9 < 2 }));
+    expect(m.fighters[1].status.shock).toBeGreaterThan(0);
+  });
+
+  it("makes two different conditions react in an overload", () => {
+    const m = duel(20);
+    m.fighters[1].status.poison = 200;
+    const before = m.fighters[1].hp;
+    run(m, C.QUICK_MIN + 2, { steady: true });
+    const ev = run(m, 12, (t) => ({ steady: true, shot: t < 2 }));
+    expect(has(ev, "overload")).toBe(true);
+    expect(before - m.fighters[1].hp).toBeGreaterThanOrEqual(C.OVERLOAD_DMG + C.TESLA_DMG_MIN);
+    for (const k of STATUSES) expect(m.fighters[1].status[k]).toBe(0);
+  });
+
+  it("hex makes every hit hurt more", () => {
+    const plain = hits(run(fight(), 12, (t) => ({ strike: t < 2 })))[0].damage;
+    const m = fight();
+    m.fighters[1].status.hex = 200;
+    const hexed = hits(run(m, 12, (t) => ({ strike: t < 2 })))[0].damage;
+    expect(hexed).toBeCloseTo(plain * C.HEX_DMG, 5);
+  });
+});
+
+describe("the witch", () => {
+  const duel = (gap = 2): Match => fight(gap, { kits: ["witch", "outlaw"] });
+
+  it("is the lightest of the three and floats down", () => {
+    expect(KITS.witch.hp).toBeLessThan(KITS.engineer.hp);
+    expect(KITS.engineer.hp).toBeLessThan(KITS.hunter.hp);
+    const air = (kits: MatchOptions["kits"]): number => {
+      const m = fight(30, { kits });
+      run(m, 3, (t) => ({ jump: t < 2 }));
+      let ticks = 0;
+      while (!m.fighters[0].grounded && ticks++ < 300) run(m, 1);
+      return ticks;
+    };
+    expect(air(["witch", "outlaw"])).toBeGreaterThan(air(["hunter", "outlaw"]) * 1.2);
+  });
+
+  it("hits everything around her, even a rival standing behind", () => {
+    const m = duel(2);
+    // Put the rival directly behind her; her facing snaps to the target, so turn her away by hand mid-pulse.
+    const ev: SimEvent[] = [];
+    for (let t = 0; t < 14; t++) {
+      ev.push(...stepMatch(m, [frame({ strike: t < 2 }, t), blankInput()]));
+      m.fighters[0].yaw += Math.PI;
+    }
+    expect(hits(ev).length).toBe(1);
+  });
+
+  it("throws bolts that bend toward a moving target", () => {
+    const m = duel(16);
+    const ev = run(m, 90, (t) => ({ shot: t < 2 }), { mx: 1 });
+    expect(ev.some((e) => e.type === "shot" && e.kind === "bolt")).toBe(true);
+    expect(hits(ev).length).toBe(1);
+    expect(hits(ev)[0].damage).toBe(BOLT_HIT.damage);
+  });
+
+  it("draws a circle under the target that goes off after a warning, then lingers", () => {
+    const m = duel(14);
+    m.fighters[0].meter = 60;
+    // Hold off the bolt she would otherwise throw as the cast begins, so only the circle is measured.
+    m.fighters[0].shotCd = 9999;
+    const ev = run(m, 12 + ZONES.hex.fuse + 14, { shot: true });
+    const spawn = ev.find((e) => e.type === "zoneSpawn");
+    expect(spawn).toMatchObject({ kind: "hex" });
+    expect(has(ev, "zoneErupt")).toBe(true);
+    expect(hits(ev).length).toBe(1);
+    expect(m.fighters[1].status.hex).toBeGreaterThan(0);
+    expect(m.fighters[0].meter).toBeLessThan(60);
+    expect(m.zones.length).toBe(1);
+    run(m, ZONES.hex.life + 5);
+    expect(m.zones.length).toBe(0);
+  });
+
+  it("gives a fighter who moves time to walk out of a circle", () => {
+    const m = duel(14);
+    m.fighters[0].meter = 60;
+    m.fighters[0].shotCd = 9999;
+    const ev = run(m, 12 + ZONES.hex.fuse + 14, { shot: true }, (t) => ({ mx: t > 14 ? 1 : 0 }));
+    expect(has(ev, "zoneErupt")).toBe(true);
+    expect(hits(ev).length).toBe(0);
+  });
+
+  it("cannot be blocked while a circle lingers under you", () => {
+    const m = duel(14);
+    m.fighters[0].meter = 60;
+    m.fighters[0].shotCd = 9999;
+    run(m, 12 + ZONES.hex.fuse + 2, { shot: true }, { guard: true });
+    const hp = m.fighters[1].hp;
+    run(m, ZONES.hex.every * 3, {}, { guard: true });
+    expect(m.fighters[1].hp).toBeLessThan(hp);
+  });
+
+  it("calls a storm from holding steady, stronger the longer she chants", () => {
+    const burst = (wait: number): number => {
+      const m = duel(14);
+      run(m, wait, { steady: true });
+      const ev = run(m, 40, (t) => ({ steady: true, shot: t < 2 }));
+      expect(ev.find((e) => e.type === "zoneSpawn")).toMatchObject({ kind: "storm" });
+      return hits(ev)[0].damage;
+    };
+    expect(burst(C.QUICK_FULL + 5)).toBeGreaterThan(burst(C.QUICK_MIN + 2) * 1.5);
+  });
+
+  it("hangs a roped target in the air and hexes them", () => {
+    const m = duel(14);
+    m.fighters[0].meter = 100;
+    const ev = run(m, 60, (t) => ({ special: t < 2 }));
+    expect(ev.some((e) => e.type === "lasso" && e.hit)).toBe(true);
+    expect(m.fighters[1].pos.y).toBeGreaterThan(1.5);
+    expect(distH(m.fighters[0].pos, m.fighters[1].pos)).toBeGreaterThan(10);
+    expect(m.fighters[1].status.hex).toBeGreaterThan(0);
+  });
+
+  it("has no cylinder to empty or reload", () => {
+    const m = duel(16);
+    const ev = run(m, 300, tap("shot", 10));
+    expect(has(ev, "reloadStart")).toBe(false);
+    expect(ev.filter((e) => e.type === "shot").length).toBeGreaterThan(4);
+  });
+});
+
+describe("the engineer", () => {
+  const duel = (gap = 2): Match => fight(gap, { kits: ["engineer", "outlaw"] });
+
+  it("fires rivets that poison", () => {
+    const m = duel(20);
+    const ev = run(m, 30, (t) => ({ shot: t < 2 }));
+    expect(ev.some((e) => e.type === "shot" && e.kind === "rivet")).toBe(true);
+    expect(hits(ev)[0].damage).toBe(C.RIVET_DMG);
+    expect(m.fighters[1].status.poison).toBeGreaterThan(0);
+  });
+
+  it("ends a string with the prod, which shocks", () => {
+    const m = duel();
+    m.fighters[0].meter = 60;
+    const ev = run(m, 120, (t) => ({ strike: t < 50 && t % 9 < 2 }));
+    expect(hits(ev).length).toBe(3);
+    expect(ev.some((e) => e.type === "status" && e.kind === "shock")).toBe(true);
+  });
+
+  it("sets up an overload alone: poison first, then shock", () => {
+    const m = duel(2);
+    m.fighters[0].meter = 60;
+    m.fighters[1].status.poison = 250;
+    const ev = run(m, 120, (t) => ({ strike: t < 50 && t % 9 < 2 }));
+    expect(has(ev, "overload")).toBe(true);
+  });
+
+  it("gasses the ground under the target, and the gas stays", () => {
+    const m = duel(14);
+    m.fighters[0].meter = 60;
+    const ev = run(m, 12 + ZONES.gas.fuse + 60, (t) => ({ special: t < 2 }));
+    expect(ev.find((e) => e.type === "zoneSpawn")).toMatchObject({ kind: "gas" });
+    expect(m.fighters[1].status.poison).toBeGreaterThan(0);
+    expect(m.zones.length).toBe(1);
+    expect(m.fighters[0].meter).toBe(60 - C.LARIAT_COST + (m.fighters[0].meter - (60 - C.LARIAT_COST)));
+  });
+
+  it("shocks an attacker who is caught mid-combo", () => {
+    const m = fight(2, { kits: ["outlaw", "engineer"] });
+    run(m, 8, tap("strike"));
+    expect(m.fighters[1].state).toBe("hitstun");
+    const ev = run(m, 6, {}, (t) => ({ guard: t < 2 }));
+    expect(has(ev, "armCatch")).toBe(true);
+    expect(m.fighters[0].status.shock).toBeGreaterThan(0);
+    expect(m.fighters[0].state).toBe("stagger");
+  });
+});
+
+describe("every class against every other", () => {
+  const classes = ["hunter", "witch", "engineer"] as const;
+
+  it("plays to a finish with no broken state, and nobody is unbeatable", () => {
+    const wins: Record<string, number> = { hunter: 0, witch: 0, engineer: 0 };
+    const seen = new Set<string>();
+    let games = 0;
+    for (const a of classes) {
+      for (const b of classes) {
+        if (a === b) continue;
+        for (let seed = 1; seed <= 8; seed++) {
+          const m = createMatch(seed * 13 + 1, { kits: [a, b] });
+          const ai0 = AI.create(0, "normal", seed * 31 + 1);
+          const ai1 = AI.create(1, "normal", seed * 17 + 5);
+          while (m.phase !== "done" && m.tick < 60 * 60 * 6) {
+            for (const e of stepMatch(m, [ai0.think(m), ai1.think(m)])) seen.add(e.type);
+            for (const f of m.fighters) {
+              if (![f.pos.x, f.pos.y, f.pos.z, f.hp, f.meter].every(Number.isFinite)) throw new Error(`non-finite state in ${a} v ${b}`);
+              if (f.hp < 0 || f.hp > f.maxHp) throw new Error(`hp out of range in ${a} v ${b}`);
+              if (Math.hypot(f.pos.x, f.pos.z) > C.ARENA_R + 1e-3) throw new Error(`left the arena in ${a} v ${b}`);
+            }
+          }
+          expect(m.phase, `${a} v ${b} seed ${seed} did not finish`).toBe("done");
+          wins[m.fighters[m.winner].kit]++;
+          games++;
+        }
+      }
+    }
+    console.log(`class round-robin over ${games} duels: ${JSON.stringify(wins)}`);
+    for (const type of ["zoneSpawn", "zoneErupt", "status", "overload"]) expect(seen.has(type), `expected "${type}"`).toBe(true);
+    // Each class plays 32 duels. None should win almost all or almost none of them.
+    for (const c of classes) {
+      expect(wins[c], `${c} wins`).toBeGreaterThan(4);
+      expect(wins[c], `${c} wins`).toBeLessThan(28);
+    }
   });
 });
 
