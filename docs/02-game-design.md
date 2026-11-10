@@ -27,10 +27,10 @@ vanishing behind your attacker, beam clashes and cinematic finishers.
 
 | Want | Borrowed idea |
 |---|---|
-| Look and pace of the world | Realistic Western open worlds: natural lighting, horses, weather |
+| Pace of the world | Western open worlds: horses, weather, long rides between towns |
+| Look | Cel-shaded anime rendering: flat tones, ink outlines, bold effects |
 | Combat feel | 3D anime arena fighters: lock-on, dash, vanish, launch, ultimates, team assists |
 | How the two join | Open-zone anime RPGs, where fights happen in the world you were just walking through |
-| Proof that realism and anime-scale fights can share a screen | Realistic action games with giant, effects-heavy boss duels |
 
 We borrow mechanics and genre, never characters, move names, maps or interface.
 

@@ -1,0 +1,677 @@
+import { MOVES } from "../sim/moves";
+import type { Fighter, Match } from "../sim/types";
+
+// Procedural animation. There are no animation files: each state maps to a key
+// pose (joint angles in radians) and the rig eases toward it. Fast easing on
+// attacks gives the snap of hand-keyed anime poses.
+//
+// Conventions for a character facing +Z: limbs hang along -Y at zero rotation;
+// negative X-rotation swings a limb forward; positive Z-rotation swings it to
+// the character's right; a positive spine X-rotation leans forward.
+
+export type Joint = "body" | "spine" | "head" | "shL" | "elL" | "shR" | "elR" | "hipL" | "knL" | "hipR" | "knR";
+export const JOINTS: Joint[] = ["body", "spine", "head", "shL", "elL", "shR", "elR", "hipL", "knL", "hipR", "knR"];
+
+type R3 = [number, number, number];
+export type Pose = Record<Joint, R3> & { y: number };
+
+const pose = (p: Partial<Record<Joint, R3>> & { y?: number }): Pose => {
+  const out = { y: p.y ?? 0 } as Pose;
+  for (const j of JOINTS) out[j] = p[j] ?? [0, 0, 0];
+  return out;
+};
+
+/** Swaps left and right, for the off-hand version of a move. */
+function mirror(p: Pose): Pose {
+  const flip = (r: R3): R3 => [r[0], -r[1], -r[2]];
+  return {
+    y: p.y,
+    body: flip(p.body),
+    spine: flip(p.spine),
+    head: flip(p.head),
+    shL: flip(p.shR),
+    elL: flip(p.elR),
+    shR: flip(p.shL),
+    elR: flip(p.elL),
+    hipL: flip(p.hipR),
+    knL: flip(p.knR),
+    hipR: flip(p.hipL),
+    knR: flip(p.knL),
+  };
+}
+
+function blend(a: Pose, b: Pose, t: number): Pose {
+  const out = { y: a.y + (b.y - a.y) * t } as Pose;
+  for (const j of JOINTS) {
+    out[j] = [a[j][0] + (b[j][0] - a[j][0]) * t, a[j][1] + (b[j][1] - a[j][1]) * t, a[j][2] + (b[j][2] - a[j][2]) * t];
+  }
+  return out;
+}
+
+const IDLE = pose({
+  y: -0.05,
+  spine: [0.1, -0.3, 0],
+  head: [0, 0.3, 0],
+  shR: [-0.35, 0, 0.25],
+  elR: [-1.1, 0, 0],
+  shL: [-0.15, 0, -0.3],
+  elL: [-0.7, 0, 0],
+  hipL: [-0.25, 0, -0.12],
+  knL: [0.35, 0, 0],
+  hipR: [0.2, 0, 0.12],
+  knR: [0.4, 0, 0],
+});
+
+const JUMP = pose({
+  spine: [0.1, 0, 0],
+  shL: [0.3, 0, -0.5],
+  shR: [0.3, 0, 0.5],
+  elL: [-0.6, 0, 0],
+  elR: [-0.6, 0, 0],
+  hipL: [-0.9, 0, 0],
+  knL: [1.4, 0, 0],
+  hipR: [-0.2, 0, 0],
+  knR: [0.8, 0, 0],
+});
+
+const FALL = pose({
+  spine: [0.05, 0, 0],
+  shL: [-0.4, 0, -1.0],
+  shR: [-0.4, 0, 1.0],
+  elL: [-0.3, 0, 0],
+  elR: [-0.3, 0, 0],
+  hipL: [-0.3, 0, -0.1],
+  knL: [0.5, 0, 0],
+  hipR: [0.1, 0, 0.1],
+  knR: [0.6, 0, 0],
+});
+
+const S1_WIND = pose({
+  y: -0.08,
+  spine: [0.1, 0.6, 0],
+  shR: [0.3, 0, 1.3],
+  elR: [-1.6, 0, 0],
+  shL: [-0.5, 0, -0.3],
+  elL: [-1.2, 0, 0],
+  hipL: [-0.4, 0, -0.1],
+  knL: [0.5, 0, 0],
+  hipR: [0.3, 0, 0.1],
+  knR: [0.4, 0, 0],
+});
+const S1_HIT = pose({
+  y: -0.1,
+  spine: [0.22, -0.75, 0],
+  head: [0, 0.5, 0],
+  shR: [-1.45, 0, -0.25],
+  elR: [-0.3, 0, 0],
+  shL: [0.5, 0, -0.5],
+  elL: [-1.0, 0, 0],
+  hipL: [-0.6, 0, -0.1],
+  knL: [0.6, 0, 0],
+  hipR: [0.5, 0, 0.1],
+  knR: [0.25, 0, 0],
+});
+const S2_WIND = mirror(S1_WIND);
+const S2_HIT = mirror(S1_HIT);
+
+const S3_HIT = pose({
+  y: -0.02,
+  spine: [-0.35, 0, 0],
+  shL: [-0.2, 0, -1.1],
+  shR: [-0.2, 0, 1.1],
+  elL: [-0.5, 0, 0],
+  elR: [-0.5, 0, 0],
+  hipR: [-1.5, 0, 0.15],
+  knR: [0.05, 0, 0],
+  hipL: [0.1, 0, -0.1],
+  knL: [0.3, 0, 0],
+});
+
+const BLAST_WIND = pose({
+  y: -0.18,
+  spine: [0.45, 0.5, 0],
+  shR: [0.9, 0, 0.3],
+  shL: [0.9, 0, -0.3],
+  elR: [-1.5, 0, 0],
+  elL: [-1.5, 0, 0],
+  hipL: [-0.5, 0, -0.1],
+  knL: [0.9, 0, 0],
+  hipR: [0.2, 0, 0.1],
+  knR: [0.8, 0, 0],
+});
+const BLAST_HIT = pose({
+  y: -0.16,
+  spine: [0.4, 0, 0],
+  head: [-0.3, 0, 0],
+  shR: [-1.5, 0, -0.15],
+  shL: [-1.5, 0, 0.15],
+  hipL: [-0.95, 0, -0.1],
+  knL: [0.95, 0, 0],
+  hipR: [0.75, 0, 0.1],
+  knR: [0.1, 0, 0],
+});
+
+const LAUNCH_WIND = pose({
+  y: -0.38,
+  spine: [0.5, 0.3, 0],
+  shR: [0.5, 0, 0.3],
+  elR: [-1.4, 0, 0],
+  shL: [-0.4, 0, -0.3],
+  elL: [-1.2, 0, 0],
+  hipL: [-1.0, 0, -0.1],
+  knL: [1.6, 0, 0],
+  hipR: [-0.8, 0, 0.1],
+  knR: [1.6, 0, 0],
+});
+const LAUNCH_HIT = pose({
+  y: 0.22,
+  spine: [-0.18, -0.2, 0],
+  head: [-0.4, 0, 0],
+  shR: [-2.95, 0, 0.1],
+  shL: [0.4, 0, -0.4],
+  elL: [-0.8, 0, 0],
+  hipL: [-1.25, 0, 0],
+  knL: [1.5, 0, 0],
+  hipR: [0.1, 0, 0],
+  knR: [0.1, 0, 0],
+});
+
+const SLAM_WIND = pose({
+  y: 0.1,
+  spine: [-0.32, 0, 0],
+  head: [-0.3, 0, 0],
+  shL: [-2.9, 0, -0.2],
+  shR: [-2.9, 0, 0.2],
+  hipL: [-0.2, 0, -0.1],
+  knL: [0.5, 0, 0],
+  hipR: [0.1, 0, 0.1],
+  knR: [0.6, 0, 0],
+});
+const SLAM_HIT = pose({
+  y: -0.22,
+  spine: [0.75, 0, 0],
+  head: [-0.4, 0, 0],
+  shL: [-0.85, 0, -0.1],
+  shR: [-0.85, 0, 0.1],
+  hipL: [-0.8, 0, -0.1],
+  knL: [1.1, 0, 0],
+  hipR: [-0.4, 0, 0.1],
+  knR: [1.1, 0, 0],
+});
+
+const HEAVY_AIM = pose({
+  y: -0.1,
+  spine: [0.15, 0, 0],
+  shR: [-1.5, 0, -0.3],
+  elR: [-0.1, 0, 0],
+  shL: [-1.4, 0, 0.45],
+  elL: [-0.5, 0, 0],
+  hipL: [-0.3, 0, -0.3],
+  knL: [0.4, 0, 0],
+  hipR: [0.3, 0, 0.3],
+  knR: [0.4, 0, 0],
+});
+const HEAVY_FIRE = pose({
+  y: -0.06,
+  spine: [-0.28, 0, 0],
+  head: [0.2, 0, 0],
+  shR: [-2.05, 0, -0.3],
+  elR: [-0.4, 0, 0],
+  shL: [-1.95, 0, 0.45],
+  elL: [-0.7, 0, 0],
+  hipL: [-0.5, 0, -0.3],
+  knL: [0.5, 0, 0],
+  hipR: [0.5, 0, 0.3],
+  knR: [0.3, 0, 0],
+});
+
+const GUARD = pose({
+  y: -0.12,
+  spine: [0.25, 0, 0],
+  shL: [-1.3, 0, 0.55],
+  elL: [-1.9, 0, 0],
+  shR: [-1.3, 0, -0.55],
+  elR: [-1.9, 0, 0],
+  hipL: [-0.4, 0, -0.12],
+  knL: [0.6, 0, 0],
+  hipR: [0.3, 0, 0.12],
+  knR: [0.6, 0, 0],
+});
+
+const HIT_A = pose({
+  y: -0.03,
+  spine: [-0.55, 0.3, 0],
+  head: [-0.4, 0, 0],
+  shL: [0.2, 0, -1.0],
+  shR: [0.2, 0, 1.0],
+  elL: [-0.4, 0, 0],
+  elR: [-0.4, 0, 0],
+  hipL: [-0.5, 0, 0],
+  knL: [0.6, 0, 0],
+  hipR: [0.3, 0, 0],
+  knR: [0.5, 0, 0],
+});
+const HIT_B = mirror(HIT_A);
+
+const STAGGER = pose({
+  y: -0.1,
+  spine: [0.5, 0, 0],
+  head: [0.4, 0, 0],
+  shL: [0.2, 0, -0.2],
+  shR: [0.2, 0, 0.2],
+  elL: [-0.2, 0, 0],
+  elR: [-0.2, 0, 0],
+  hipL: [-0.2, 0, -0.15],
+  knL: [0.7, 0, 0],
+  hipR: [0.1, 0, 0.15],
+  knR: [0.7, 0, 0],
+});
+
+const TUMBLE = pose({
+  shL: [-0.5, 0, -1.2],
+  shR: [-0.5, 0, 1.2],
+  elL: [-0.5, 0, 0],
+  elR: [-0.5, 0, 0],
+  hipL: [-0.4, 0, -0.3],
+  knL: [0.6, 0, 0],
+  hipR: [-0.4, 0, 0.3],
+  knR: [0.6, 0, 0],
+});
+
+const FLUNG = pose({
+  body: [-1.3, 0, 0],
+  head: [0.5, 0, 0],
+  shL: [-1.2, 0, -0.4],
+  shR: [-1.2, 0, 0.4],
+  hipL: [-0.9, 0, -0.15],
+  knL: [0.3, 0, 0],
+  hipR: [-0.7, 0, 0.15],
+  knR: [0.5, 0, 0],
+});
+
+const DOWN = pose({
+  y: -0.74,
+  body: [-1.5, 0, 0],
+  shL: [0, 0, -1.2],
+  shR: [0, 0, 1.2],
+  hipL: [0, 0, -0.25],
+  hipR: [0, 0, 0.25],
+  knL: [0.2, 0, 0],
+  knR: [0.5, 0, 0],
+});
+
+const RISE = pose({
+  y: -0.42,
+  spine: [0.8, 0, 0],
+  head: [-0.5, 0, 0],
+  shL: [-0.6, 0, -0.3],
+  shR: [-0.6, 0, 0.3],
+  elL: [-0.6, 0, 0],
+  elR: [-0.6, 0, 0],
+  hipL: [-1.2, 0, -0.1],
+  knL: [1.7, 0, 0],
+  hipR: [-0.6, 0, 0.1],
+  knR: [1.7, 0, 0],
+});
+
+const CHARGE = pose({
+  y: -0.14,
+  spine: [0.12, 0, 0],
+  head: [-0.2, 0, 0],
+  shL: [0.25, 0, -0.55],
+  elL: [-1.5, 0, 0],
+  shR: [0.25, 0, 0.55],
+  elR: [-1.5, 0, 0],
+  hipL: [-0.2, 0, -0.4],
+  knL: [0.5, 0, 0],
+  hipR: [-0.2, 0, 0.4],
+  knR: [0.5, 0, 0],
+});
+
+const CHASE = pose({
+  y: -0.2,
+  body: [1.15, 0, 0],
+  head: [-0.9, 0, 0],
+  shL: [0.9, 0, -0.25],
+  shR: [0.9, 0, 0.25],
+  hipL: [0.3, 0, 0],
+  knL: [0.2, 0, 0],
+  hipR: [-0.5, 0, 0],
+  knR: [1.0, 0, 0],
+});
+
+const LARIAT_WIND = pose({
+  y: -0.05,
+  spine: [-0.1, 0.4, 0],
+  shR: [-2.9, 0, 0.3],
+  elR: [-0.4, 0, 0],
+  shL: [-0.3, 0, -0.4],
+  elL: [-0.8, 0, 0],
+  hipL: [-0.3, 0, -0.1],
+  knL: [0.4, 0, 0],
+  hipR: [0.2, 0, 0.1],
+  knR: [0.4, 0, 0],
+});
+const LARIAT_THROW = pose({
+  y: -0.1,
+  spine: [0.3, -0.4, 0],
+  head: [0, 0.3, 0],
+  shR: [-1.5, 0, 0],
+  shL: [0.5, 0, -0.4],
+  elL: [-0.9, 0, 0],
+  hipL: [-0.6, 0, -0.1],
+  knL: [0.6, 0, 0],
+  hipR: [0.5, 0, 0.1],
+  knR: [0.2, 0, 0],
+});
+const LARIAT_YANK = pose({
+  y: -0.12,
+  spine: [-0.2, 0.5, 0],
+  shR: [-0.6, 0, 0.2],
+  elR: [-1.6, 0, 0],
+  shL: [-0.6, 0, -0.2],
+  elL: [-1.6, 0, 0],
+  hipL: [0.3, 0, -0.1],
+  knL: [0.3, 0, 0],
+  hipR: [-0.5, 0, 0.1],
+  knR: [0.6, 0, 0],
+});
+
+const PULLED = pose({
+  body: [0.6, 0, 0],
+  head: [-0.5, 0, 0],
+  shL: [-1.6, 0, -0.2],
+  shR: [-1.6, 0, 0.2],
+  hipL: [0.4, 0, 0],
+  knL: [0.4, 0, 0],
+  hipR: [0.6, 0, 0],
+  knR: [0.2, 0, 0],
+});
+
+const ULT_READY = pose({
+  y: -0.05,
+  spine: [0.05, -0.2, 0],
+  head: [0.45, 0.2, 0],
+  shR: [-0.4, 0, 0.2],
+  elR: [-2.2, 0, 0],
+  shL: [0.2, 0, -0.4],
+  elL: [-0.3, 0, 0],
+  hipL: [-0.2, 0, -0.15],
+  knL: [0.2, 0, 0],
+  hipR: [0.15, 0, 0.15],
+  knR: [0.2, 0, 0],
+});
+const AIM = pose({
+  y: -0.05,
+  spine: [0.05, -0.35, 0],
+  head: [0, 0.3, 0],
+  shR: [-1.5, 0, -0.05],
+  shL: [0.2, 0, -0.3],
+  elL: [-0.5, 0, 0],
+  hipL: [-0.25, 0, -0.15],
+  knL: [0.3, 0, 0],
+  hipR: [0.2, 0, 0.15],
+  knR: [0.3, 0, 0],
+});
+
+const BURST = pose({
+  y: 0.15,
+  spine: [-0.45, 0, 0],
+  head: [-0.5, 0, 0],
+  shL: [0.3, 0, -1.5],
+  shR: [0.3, 0, 1.5],
+  elL: [-0.5, 0, 0],
+  elR: [-0.5, 0, 0],
+  hipL: [-0.1, 0, -0.3],
+  knL: [0.3, 0, 0],
+  hipR: [-0.1, 0, 0.3],
+  knR: [0.3, 0, 0],
+});
+
+const CLASH = pose({
+  y: -0.15,
+  spine: [0.4, 0, 0],
+  head: [-0.3, 0, 0],
+  shL: [-1.5, 0, 0.2],
+  shR: [-1.5, 0, -0.2],
+  hipL: [-0.8, 0, -0.1],
+  knL: [0.8, 0, 0],
+  hipR: [0.6, 0, 0.1],
+  knR: [0.2, 0, 0],
+});
+
+const VICTORY = pose({
+  spine: [0, 0.15, 0],
+  head: [0.2, 0, 0],
+  shR: [-2.3, 0, -0.5],
+  elR: [-1.9, 0, 0],
+  shL: [0.1, 0, -0.15],
+  elL: [-0.15, 0, 0],
+  hipL: [-0.05, 0, -0.1],
+  hipR: [0.05, 0, 0.12],
+});
+
+const PARRIED = pose({
+  spine: [-0.4, 0, 0],
+  head: [-0.3, 0, 0],
+  shL: [-2.0, 0, -0.8],
+  shR: [-2.0, 0, 0.8],
+  hipL: [0.3, 0, 0],
+  knL: [0.4, 0, 0],
+  hipR: [-0.4, 0, 0],
+  knR: [0.6, 0, 0],
+});
+
+function runPose(phase: number, amount: number): Pose {
+  const s = Math.sin(phase);
+  const run = pose({
+    y: -0.03,
+    spine: [0.42, s * 0.15, 0],
+    head: [-0.3, 0, 0],
+    shL: [0.8 * s, 0, -0.15],
+    elL: [-1.2, 0, 0],
+    shR: [-0.8 * s, 0, 0.15],
+    elR: [-1.2, 0, 0],
+    hipL: [-0.9 * s, 0, 0],
+    knL: [0.4 + 0.8 * Math.max(0, Math.sin(phase + 1.2)), 0, 0],
+    hipR: [0.9 * s, 0, 0],
+    knR: [0.4 + 0.8 * Math.max(0, Math.sin(phase + Math.PI + 1.2)), 0, 0],
+  });
+  return blend(IDLE, run, amount);
+}
+
+/** Wind-up into a held hit pose, then ease back out. */
+function strike(wind: Pose, hit: Pose, mf: number, activeFrom: number, total: number): Pose {
+  if (mf < activeFrom - 1) return wind;
+  if (mf < total - 8) return hit;
+  return blend(hit, IDLE, (mf - (total - 8)) / 8);
+}
+
+export interface PoseResult {
+  pose: Pose;
+  /** Easing rate per second. Higher is snappier. */
+  rate: number;
+  /** Extra whole-body rotation applied directly, for spins and tumbles. */
+  spin: R3;
+  hidden: boolean;
+}
+
+export interface RigClock {
+  /** Run-cycle phase in radians. */
+  phase: number;
+  /** Seconds since the rig was created. */
+  time: number;
+  /** Accumulated tumble angle. */
+  tumble: number;
+  /** 1 right after a recoil-worthy shot, decaying to 0. */
+  recoil: number;
+}
+
+/** Chooses the key pose for a fighter's current state. */
+export function choosePose(f: Fighter, m: Match, clock: RigClock, speed: number): PoseResult {
+  const res: PoseResult = { pose: IDLE, rate: 16, spin: [0, 0, 0], hidden: false };
+  const t = clock.time;
+  const jitter = Math.sin(t * 47) * 0.03;
+
+  switch (f.state) {
+    case "free": {
+      if (m.phase !== "fight" && m.phase !== "intro" && m.winner === f.id) {
+        res.pose = VICTORY;
+        res.rate = 6;
+        break;
+      }
+      if (!f.grounded) res.pose = f.vel.y > 2 ? JUMP : FALL;
+      else res.pose = runPose(clock.phase, Math.min(1, speed / 5));
+      if (f.shotHold >= 12) {
+        res.pose = blend(HEAVY_AIM, pose({ ...HEAVY_AIM, y: HEAVY_AIM.y + jitter }), Math.min(1, f.shotHold / 34));
+        res.rate = 20;
+      } else if (f.shotPose > 0) {
+        // Fire from the hip without breaking stride: only the gun arm and torso change.
+        const base = res.pose;
+        const kick = f.shotPose > 10 ? -0.35 : 0;
+        res.pose = { ...base, shR: [AIM.shR[0] + kick, AIM.shR[1], AIM.shR[2]], elR: AIM.elR, spine: [base.spine[0], -0.35, 0], head: [base.head[0], 0.3, 0] };
+        res.rate = 34;
+      }
+      break;
+    }
+    case "attack": {
+      const mv = f.move ? MOVES[f.move] : null;
+      res.rate = 34;
+      const from = mv && mv.hits.length ? mv.hits[0].from : 6;
+      switch (f.move) {
+        case "s1":
+          res.pose = strike(S1_WIND, S1_HIT, f.mf, from, mv!.total);
+          break;
+        case "s2":
+          res.pose = strike(S2_WIND, S2_HIT, f.mf, from, mv!.total);
+          break;
+        case "s3": {
+          res.pose = f.mf < mv!.total - 8 ? S3_HIT : blend(S3_HIT, IDLE, (f.mf - (mv!.total - 8)) / 8);
+          // One full spin, landing on the hit frame.
+          const k = Math.min(1, Math.max(0, (f.mf - 1) / (from + 2)));
+          res.spin = [0, k * Math.PI * 2, 0];
+          break;
+        }
+        case "enderBlast":
+          res.pose = strike(BLAST_WIND, BLAST_HIT, f.mf, from, mv!.total);
+          break;
+        case "enderLaunch":
+          res.pose = strike(LAUNCH_WIND, LAUNCH_HIT, f.mf, from, mv!.total);
+          break;
+        case "enderSlam":
+          res.pose = strike(SLAM_WIND, SLAM_HIT, f.mf, from, mv!.total);
+          break;
+        case "heavyShot":
+          res.pose = f.mf < mv!.fireAt! ? HEAVY_AIM : f.mf < mv!.fireAt! + 12 ? HEAVY_FIRE : blend(HEAVY_FIRE, IDLE, (f.mf - mv!.fireAt! - 12) / 12);
+          break;
+        case "lariat":
+          if (f.mf < mv!.fireAt!) {
+            res.pose = { ...LARIAT_WIND, shR: [LARIAT_WIND.shR[0], 0, 0.3 + 0.45 * Math.sin(f.mf * 1.3)] };
+          } else res.pose = f.moveHit && !f.zipFlag ? LARIAT_YANK : LARIAT_THROW;
+          break;
+        case "lastWord":
+          res.pose = f.mf < mv!.fireAt! ? ULT_READY : { ...AIM, shR: [AIM.shR[0] - 0.5 * clock.recoil, 0, AIM.shR[2]] };
+          res.rate = f.mf < mv!.fireAt! ? 12 : 40;
+          break;
+      }
+      break;
+    }
+    case "step":
+      res.pose = { ...FALL, y: -0.2, spine: [0.3, 0, 0] };
+      res.rate = 30;
+      break;
+    case "chase":
+    case "zip":
+      res.pose = CHASE;
+      res.rate = 40;
+      break;
+    case "guard":
+      res.pose = GUARD;
+      res.rate = 34;
+      break;
+    case "blockstun":
+      res.pose = { ...GUARD, spine: [-0.1, 0, 0], y: -0.16 };
+      res.rate = 34;
+      break;
+    case "parried":
+      res.pose = PARRIED;
+      res.rate = 30;
+      break;
+    case "hitstun":
+      res.pose = f.hitsTaken % 2 === 0 ? HIT_A : HIT_B;
+      res.rate = 40;
+      break;
+    case "stagger":
+      res.pose = { ...STAGGER, spine: [0.5 + Math.sin(t * 5) * 0.1, 0, Math.sin(t * 6) * 0.2] };
+      res.rate = 14;
+      break;
+    case "launched":
+      res.pose = TUMBLE;
+      res.spin = [-clock.tumble, 0, 0];
+      res.rate = 26;
+      break;
+    case "blasted":
+      res.pose = FLUNG;
+      res.spin = [0, 0, clock.tumble * 0.8];
+      res.rate = 40;
+      break;
+    case "slammed":
+      res.pose = { ...FLUNG, body: [-2.7, 0, 0] };
+      res.rate = 40;
+      break;
+    case "bounced":
+      res.pose = TUMBLE;
+      res.spin = [-1.5 - clock.tumble * 0.5, 0, 0];
+      res.rate = 26;
+      break;
+    case "knockdown":
+      res.pose = DOWN;
+      res.rate = 22;
+      break;
+    case "getup":
+      res.pose = f.t < 7 ? RISE : IDLE;
+      res.rate = 16;
+      break;
+    case "charge":
+      res.pose = { ...CHARGE, y: CHARGE.y + jitter, spine: [0.12 + jitter, 0, 0] };
+      res.rate = 20;
+      break;
+    case "slip":
+      res.hidden = true;
+      break;
+    case "pulled":
+      res.pose = PULLED;
+      res.rate = 30;
+      break;
+    case "burst":
+      res.pose = BURST;
+      res.rate = 30;
+      break;
+    case "clash":
+      res.pose = { ...CLASH, y: CLASH.y + jitter };
+      res.rate = 20;
+      break;
+    case "cine": {
+      const cine = m.cine;
+      if (cine && cine.att === f.id) {
+        res.pose = cine.t < 30 ? ULT_READY : { ...AIM, shR: [AIM.shR[0] - 0.7 * clock.recoil, 0, AIM.shR[2]] };
+        res.rate = 30;
+      } else {
+        res.pose = clock.recoil > 0.5 ? (f.hitsTaken % 2 === 0 ? HIT_A : HIT_B) : STAGGER;
+        res.rate = 36;
+      }
+      break;
+    }
+    case "ko":
+      if (f.grounded) {
+        res.pose = DOWN;
+        res.rate = 14;
+      } else {
+        res.pose = FLUNG;
+        res.spin = [0, 0, clock.tumble * 0.5];
+        res.rate = 30;
+      }
+      break;
+  }
+  return res;
+}

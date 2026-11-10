@@ -1,196 +1,169 @@
 # WestX — Technical Plan
 
-Engine and tooling facts were checked on 10 November 2026. Sources are at the bottom,
-and anything I could not confirm first-hand is marked.
+Decided 10 November 2026: WestX is a browser game with a cel-shaded look, built and
+tested from a cloud session. This replaces the earlier Unreal Engine recommendation.
 
-## 1. Engine
+## 1. Stack
 
-**Recommendation: Unreal Engine 5.8.** It is the only engine where a small team can
-get near the visual bar you set, because the hard parts ship in the box.
-
-| | Unreal Engine 5.8 | Godot 4.7 |
+| Piece | Choice | Why |
 |---|---|---|
-| Visual ceiling | Highest available: Nanite geometry, Lumen lighting, MegaLights | Good, short of big-budget realism |
-| Open-world tools | Built in: World Partition streaming, procedural placement (PCG), automatic distant-detail meshes | Mostly build-your-own or community add-ons |
-| Combat framework | Gameplay Ability System built in: meters, cooldowns, buffs, networking | Written from scratch |
-| Free high-end assets | Megascans, MetaHuman, 500+ motion-capture animations | Fewer, with more conversion work |
-| Cost | Free. 5% royalty on gross revenue above $1M per game | Free, open source, no royalty |
-| Hardware | Needs a strong Windows PC | Runs on modest hardware |
-| How much I can build from this cloud session | Code, data, config, editor scripts. I cannot run the editor here, and levels and Blueprints are binary files | Nearly everything is text, and I can run and test it here |
+| 3D engine | Babylon.js 9.35 | Runs in any modern browser, includes animation, physics and lighting, and can be built and tested without a graphics card |
+| Language | TypeScript | Catches mistakes before the game runs |
+| Build | Vite | One command produces static files |
+| Rule tests | Vitest | The combat rules run without a browser |
+| Browser test | Playwright | Boots the built game in headless Chromium |
+| Renderer | WebGL 2 today | Works everywhere now. WebGPU is the upgrade path when the open world needs it |
+| Physics engine | None yet | Fighter motion is scripted so combos are reliable. A physics engine arrives with the open world |
+| Hosting | Static files | No server, no per-player cost |
 
-**Choose Godot instead if** you don't have a strong PC, you want me to do most of the
-building end to end, or a stylized look is acceptable.
+## 2. Why not Unreal
 
-### Two things to know about Unreal right now
+- This cloud machine has no graphics card, 15 GB of memory and 31 GB of free disk.
+  The Unreal editor cannot run here.
+- Unreal has no official browser export. Its browser route is Pixel Streaming, which
+  runs the game on a cloud graphics server per player and sends video.
+- Godot exports to the browser, but only with its older renderer.
 
-- **Unreal Engine 6 is coming.** Epic announced it in May 2026, with early access
-  targeted for late 2027 and a full release after that. 5.8 is the last planned major
-  UE5 release. UE6 makes a new language, Verse, the standard for gameplay scripting,
-  and Epic has promised a migration path. Reports conflict on how long today's
-  Blueprints and C++ gameplay framework stay supported. Start on 5.8 anyway, since
-  UE6 is at least a year from being usable, and keep game rules in data and in the
-  ability system so a later move is cheaper.
-- **5.8 includes an experimental plugin that lets Claude drive the editor** on your
-  own PC: placing objects, editing Blueprints, running procedural tools. That closes
-  most of the gap in the table's last row. It is experimental and local-only, and one
-  report says it needs a source build of the engine. Treat it as promising, not proven.
+The cost of this choice is visual ceiling and map size. A browser game can look good.
+It cannot look like Red Dead.
 
-### Hardware
+## 3. Architecture
 
-My rule of thumb for working comfortably on a UE5 open world, not an official spec:
-8-core CPU, 32–64 GB RAM, a GPU with 12 GB or more of video memory, and 1 TB of fast
-SSD storage.
+The code is split in two, and the split is the most important decision in the project.
 
-## 2. How the work splits
+| Layer | Folder | Knows about |
+|---|---|---|
+| **Simulation** | `src/sim/` | Rules only. No browser, no 3D engine. |
+| **Presentation** | `src/render/`, `src/ui/`, `src/audio/`, `src/input/` | How it looks, sounds and is controlled |
 
-| I can do from the repo | Needs you at the editor |
+The simulation is one function: the match state plus two players' inputs go in, and
+the next state plus a list of events comes out. Everything else reacts to those events.
+
+What that buys:
+
+- **Testable rules.** Combos, guard, Slip, meter and the ultimate are checked by
+  automated tests in milliseconds.
+- **A fair AI.** The rival plays through the same inputs a person does, so it cannot
+  break rules the player has to follow.
+- **A path to online play.** A match is fully described by its seed and its inputs.
+- **Replaceable art.** New characters or a new renderer do not touch the rules.
+
+Other decisions:
+
+- **Fixed 60-per-second tick.** Rendering runs at the display's rate and interpolates.
+- **Moves are data.** Every attack's timing, damage and effect is a row in
+  `src/sim/moves.ts`. Tuning a combo means editing numbers.
+- **No asset files yet.** Characters, arena, effects and sound are all generated in
+  code. That keeps the download near 450 KB compressed while the design is still moving.
+
+### Source map
+
+```
+src/sim/      match.ts (the rules), moves.ts (move data), ai.ts, types.ts, vec.ts, rng.ts
+src/render/   stage.ts (arena), rig.ts + poses.ts (fighters), fx.ts (effects),
+              cameraRig.ts, propsView.ts, toon.ts (cel shader)
+src/ui/       hud.ts, hud.css
+src/input/    input.ts (keyboard, gamepad, touch)
+src/audio/    sfx.ts (synthesised sound)
+src/game.ts   the loop that ties them together
+tests/        sim.test.ts
+tools/        smoke.mjs, shot.mjs, build-page.mjs
+```
+
+## 4. What is verified, and what is not
+
+| Checked here | How |
 |---|---|
-| C++ gameplay code: combat, abilities, AI, camera | Compiling and playtesting |
-| Move lists, stats and bounties as data files | Level dressing and lighting |
-| Editor scripts that build levels and place content procedurally | Importing and assigning art |
-| Build scripts, tests, documentation | Judging feel |
+| Every combat rule | 37 automated tests |
+| Whole matches run to a knockout with no broken state | 24 AI-versus-AI matches per test run |
+| The built game boots, starts a duel and takes keyboard input | Headless-browser smoke test |
+| Layout on desktop and phone sizes | Screenshots reviewed by me |
 
-With the editor plugin working, more of the right column moves left.
-
-## 3. Architecture (Unreal)
-
-### Code modules
-
-| Module | Owns |
+| Not checkable from here | Why |
 |---|---|
-| `WestXCore` | Game modes, save data, settings |
-| `WestXCombat` | Lock-on, hit detection, hit-stop, launch and knockback, clashes, duel camera |
-| `WestXAbilities` | Meters, Slip pips, specials, awakenings, ultimates |
-| `WestXWorld` | Bounties, factions, notoriety, stormfronts, trains |
-| `WestXAI` | Rabble, Named duelists, Titans, posse partners |
-| `WestXUI` | HUD, menus |
+| Frame rate on real hardware | No graphics card; the test browser renders in software |
+| How the fight feels | Needs a person playing it |
+| Sound | The test browser has no audio output; I have not heard it |
+| Touch controls on a real phone | Emulated only |
+| A physical gamepad | None attached |
 
-### Key decisions
+These are the things to report back from playing it.
 
-- **Gameplay Ability System for everything combat.** Health, the three meters, Slip
-  pips and the awakening gauge are attributes. Every move is an ability. State such
-  as airborne, launched or armored is expressed as tags. It replicates over the
-  network, which keeps co-op and PvP reachable.
-- **Moves are data.** Each attack's timing, damage, launch angle and follow-ups live
-  in tables in the repo. Tuning a combo means editing a row, and I can do that from
-  here.
-- **C++ for systems, Blueprints for content.** Rules in code, per-move visuals and
-  timing in the editor.
-- **Launches and knockback are scripted motion, not physics.** Fighters fly along
-  authored curves so combos are reliable. Physics is for debris only.
-- **Two camera modes:** over-the-shoulder for exploring and Rabble, lock-on for
-  Duels, with a blended transition on draw.
+## 5. The open world in a browser
 
-### AI
+Not built yet. The plan:
 
-- Rabble: simple group behaviors, tuned to be cut through.
-- Named: a duelist AI that uses the same verbs as the player, including Slip.
-- Titans: scripted phases with destructible parts.
-- Partners: follow, assist on call, and stay out of your combo.
+1. **Terrain** from public-domain U.S. Geological Survey elevation data, remixed and
+   cut into tiles.
+2. **Streaming:** load tiles around the player, drop distant ones, and use simpler
+   versions far away.
+3. **Scattering:** rocks, scrub and props placed by rules per region, not by hand.
+4. **Hand-built** towns and landmarks.
+5. **Budgets** for download size, memory and draw calls, set in the vertical slice
+   and held.
+6. **WebGPU** if the slice needs more than WebGL 2 gives.
 
-## 4. The world
+Map size is limited by download and memory, not by build effort:
 
-### Building the map
+| Stage | Area |
+|---|---|
+| Vertical slice | 1–2 km² |
+| Early access | 6–9 km² |
+| Full release | 16–25 km² |
 
-1. **Start from real terrain.** U.S. Geological Survey elevation data is public
-   domain, at about 10 m resolution nationwide and 1 m in many areas. Canyon country
-   and salt flats are available as-is.
-2. **Convert** to a heightmap, checking the vertical scale.
-3. **Remix** in a terrain tool: compress distances, exaggerate mesas, add erosion.
-   The goal is believable, not a literal copy of a real place.
-4. **Import** as a streamed landscape.
-5. **Scatter procedurally** by biome: rock, scrub, trees, fences, roads.
-6. **Hand-dress** towns and points of interest.
+## 6. Characters and animation
 
-Unreal 5.8 also has a new Mesh Terrain system that allows overhangs and arches, which
-would suit canyon country. It is experimental, so the plan uses the standard
-landscape and revisits later.
-
-### Size
-
-Fast movement eats map. The plan grows in steps and keeps each one dense:
-
-| Stage | Area | Content |
-|---|---|---|
-| Vertical slice | About 4 km² | One canyon, one town, finished to final quality |
-| Early access | About 16 km² | Two regions |
-| Full release | 36–64 km² | Four or five regions |
-
-### Destruction budget
-
-- Pre-fractured meshes for hero props and wooden buildings.
-- Cheap swaps and decals for everything else.
-- Craters as decals and small terrain patches, not true deformation.
-- A hard cap on simultaneous debris.
-
-## 5. Art and assets
-
-| Need | Source | Notes |
-|---|---|---|
-| Rocks, ground, plants | Megascans on Fab | Whole library made free on 5 November 2026 |
-| Human characters | MetaHuman | Included in the Unreal license |
-| Walking, running, climbing | Epic's Game Animation Sample | 500+ free motion-captured animations, updated for 5.8 |
-| Western buildings and props | Fab marketplace packs | Paid; check each license |
-| Terrain shape | USGS elevation data | Public domain |
-| Combat animation | Bespoke | See below |
-| Effects | Bespoke | See below |
-
-**Look:** realistic world and materials, stylized energy. Auras, hexes and impacts are
-bold and readable against a naturalistic frontier. The storm on the horizon is the
-landmark you can see from everywhere.
-
-## 6. The two expensive parts
-
-**Combat animation.** Anime combat needs a large set of hand-tuned moves per hero:
-strings, enders, specials, hit reactions and cinematic ultimates. My rough estimate is
-150–250 animations each. Free locomotion sets do not cover this. Options, cheapest
-first: retargeted marketplace packs, markerless motion capture from video, a contract
-animator for the signature moves.
-
-**Effects.** Auras, beams, impacts and awakenings are what sell the fantasy. This is
-skilled work and the first place to spend money.
+- **Now:** fighters are built from simple shapes and animated by easing between key
+  poses defined in code.
+- **Next:** rigged characters in glTF format with the same cel shader. The pose
+  system is replaced by authored animation clips; the move data stays.
+- **Still the expensive part:** each hero needs a large set of hand-tuned combat
+  animations. This is where money goes first.
 
 ## 7. Online
 
-- Co-op is server-authoritative with client prediction, which the ability system
-  supports directly.
-- PvP at this speed is harder and may need its own networking model. It ships last.
-- Even solo, combat runs on a fixed tick and avoids frame-dependent logic so it can
-  go online later.
+- Co-op and duels can be built on the simulation as it stands: send inputs, run the
+  same match on both sides.
+- One known gap: the simulation uses the browser's built-in trigonometry, which is
+  not guaranteed to give identical results in every browser. That has to be replaced
+  with a fixed implementation before two different browsers can stay in sync.
+- Online still ships after the solo game.
 
-## 8. Performance targets
+## 8. Commands
 
-- 60 fps at 1440p on a mid-to-high-end PC, using upscaling.
-- PC first. Consoles after early access. Handhelds are not a target.
-- Budgets for streaming, debris and effects are set in the vertical slice and held.
-
-## 9. Repository
-
-```
-WestX/
-  WestX.uproject
-  Source/      C++ modules
-  Config/      engine and game settings
-  Content/     binary assets, stored with Git LFS
-  Data/        move tables, stats, bounties as text
-  Tools/       editor and build scripts
-  docs/        this plan
+```bash
+npm install
 ```
 
-Binary assets go through Git LFS from the first commit. An Unreal project will
-outgrow GitHub's free LFS allowance, so expect to pay for storage or move binaries to
-a dedicated asset host.
+```bash
+npm run dev
+```
+
+```bash
+npm test
+```
+
+```bash
+npm run build
+```
+
+```bash
+npm run smoke
+```
+
+```bash
+npm run build:page
+```
+
+`dev` serves the game locally. `build` writes static files to `dist/`. `smoke` and
+`tools/shot.mjs` need Playwright with Chromium. `build:page` produces a single page
+plus one script, for hosts that wrap your HTML in their own document.
 
 ## Sources
 
-- [Unreal Engine 5 — Wikipedia](https://en.wikipedia.org/wiki/Unreal_Engine_5) (5.8 released 17 June 2026)
-- [Unreal Engine 6 release date and timeline — Ludus](https://ludusengine.com/blog/unreal-engine-6-release-date) (secondary source)
-- [Unreal Engine 6: release roadmap and tech overhaul — Playfront](https://playfront.de/en/unreal-engine-6-release-fahrplan-und-tech-umbau-stehen/) (secondary source)
-- [Unreal Engine license](https://www.unrealengine.com/license)
-- [Megascans are going free again — Quixel](https://quixel.com/news/update-megascans-are-going-free-again)
-- [Game Animation Sample updated for UE 5.8 — Epic](https://www.unrealengine.com/tech-blog/download-the-latest-game-animation-sample-project-now-updated-for-ue-5-8)
-- [MetaHuman license](https://www.metahuman.com/license)
-- [Unreal MCP plugin: setup, limits, alternatives — Ludus](https://ludusengine.com/blog/unreal-mcp-plugin-ue5-8-setup) (secondary source)
-- [Claude Desktop + Unreal Engine 5.8 via MCP — Epic forums](https://forums.unrealengine.com/t/community-tutorial-connection-tutorial-claude-desktop-unreal-engine-5-8-via-mcp/2831194)
-- [Godot 4.7.2 download page](https://godotengine.org/download/archive/4.7.2-stable/)
+- [Unreal Engine HTML5 export status — Summer Engine](https://www.summerengine.com/make-great-games/unreal-engine-html5-export)
+- [Pixel Streaming vs WebGL vs WebGPU — Vagon](https://vagon.io/blog/pixel-streaming-vs-webgl-vs-webgpu-the-best-solution-for-unreal-engine-web-deployment)
+- [Overview of renderers — Godot 4.7 docs](https://docs.godotengine.org/en/4.7/tutorials/rendering/renderers.html)
+- [Babylon.js specifications](https://babylonjs.com/specifications/)
+- [WebGPU + Three.js migration guide — Utsubo](https://www.utsubo.com/blog/webgpu-threejs-migration-guide) (browser support for WebGPU)
 - [USGS 1/3 arc-second elevation models — data.gov](https://catalog.data.gov/dataset/1-3rd-arc-second-digital-elevation-models-dems-usgs-national-map-3dep-downloadable-data-co)
