@@ -15,6 +15,7 @@ Each phase ends at a gate. If the gate fails, fix it before moving on.
 | Platform | Browser | 10 Nov 2026 |
 | Engine | Babylon.js | 10 Nov 2026 |
 | Look | Cel-shaded anime rendering on a western world | 10 Nov 2026 |
+| Structure | Walk in an overworld; fights switch to the arena. [The plan](06-overworld-and-arena.md) | 10 Nov 2026 |
 
 ## Phases
 

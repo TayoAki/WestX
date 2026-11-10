@@ -126,6 +126,7 @@ now about 10 MB. A third or fourth will need them shipped as separate files.
 | [Technical plan](docs/03-technical-plan.md) | Stack, architecture, what is verified, the open-world plan |
 | [Roadmap](docs/04-roadmap.md) | Phases, what is built, risks, open questions |
 | [The blueprint](docs/05-blueprint.md) | What the hit games have in common, and where WestX stands against each point |
+| [The overworld and the arena](docs/06-overworld-and-arena.md) | The next structure: walk in an overworld, switch to the arena to fight |
 
 WestX is inspired by the genre of *Bass X Machina* and uses none of its characters,
 names or story.

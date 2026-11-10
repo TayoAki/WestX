@@ -259,6 +259,9 @@ dynamite to shoot, and a whistle that sends your horse charging through.
 
 **What is built:** rabble and named. Titans are not.
 
+**What is planned next:** the overworld becomes a place for walking only, and every
+fight switches to the arena. See [the overworld and the arena](06-overworld-and-arena.md).
+
 **Crowd rules.** These are what make a group fight a brawl and not a queue:
 
 - One swing hits everyone in its reach, once each, and a combo through a crowd does
